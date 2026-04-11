@@ -1,0 +1,7 @@
+[package]
+name = "xdx-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core data structures and SysEx codec for YAMAHA DX7/DX100 FM synthesizers"
+
+[dependencies]

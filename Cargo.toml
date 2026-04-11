@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "xdx-core",
+]
+resolver = "2"
