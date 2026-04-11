@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "xdx-core",
+    "xdx-gui",
 ]
 resolver = "2"

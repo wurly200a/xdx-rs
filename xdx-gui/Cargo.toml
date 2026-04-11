@@ -1,0 +1,8 @@
+[package]
+name = "xdx-gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+xdx-core = { path = "../xdx-core" }
+eframe = "0.28"
