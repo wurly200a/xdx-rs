@@ -81,15 +81,14 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
     ui.add_space(4.0);
 
     // ── Row 1-4: Global + per-operator AME / EG BIAS / VELOCITY ─────────────
-    //
-    // Section headers
+    // Display order: OP4 (top) -> OP3 -> OP2 -> OP1 (bottom), matching original
     ui.horizontal(|ui| {
-        ui.add_space(120.0);   // ALG+FB columns
-        section_label(ui, "────────────── LFO ──────────────");
+        ui.add_space(120.0);
+        section_label(ui, "-------------- LFO --------------");
         ui.add_space(30.0);
-        section_label(ui, "── MODULATION SENSITIVITY ──");
+        section_label(ui, "-- MODULATION SENSITIVITY --");
         ui.add_space(18.0);
-        section_label(ui, "── KEY ──");
+        section_label(ui, "-- KEY --");
     });
 
     Grid::new("global_hdr").num_columns(14).spacing(sp).show(ui, |ui| {
@@ -99,7 +98,7 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
         }
         ui.end_row();
 
-        // OP1 global values + OP1 sensitivity
+        // First row: global params + OP4 sensitivity
         ui.label(val(v.algorithm + 1));
         ui.label(val(v.feedback));
         ui.label(tbl(LFO_WAVE_TBL, v.lfo_wave));
@@ -110,18 +109,18 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
         ui.label(tbl(ON_OFF_TBL, v.lfo_sync));
         ui.label(val(v.pitch_mod_sens));
         ui.label(val(v.amp_mod_sens));
-        ui.label(val(v.ops[0].amp_mod_en));
-        ui.label(val(v.ops[0].eg_bias_sens));
-        ui.label(val(v.ops[0].key_vel_sens));
-        ui.label(hdr("OPERATOR1"));
+        ui.label(val(v.ops[3].amp_mod_en));
+        ui.label(val(v.ops[3].eg_bias_sens));
+        ui.label(val(v.ops[3].key_vel_sens));
+        ui.label(hdr("OPERATOR4"));
         ui.end_row();
 
-        // OP2-4 sensitivity only (cols 0-9 empty)
-        for (i, label) in ["OPERATOR2","OPERATOR3","OPERATOR4"].iter().enumerate() {
+        // OP3, OP2, OP1 sensitivity (cols 0-9 empty)
+        for (op_idx, label) in [(2usize, "OPERATOR3"), (1, "OPERATOR2"), (0, "OPERATOR1")] {
             for _ in 0..10 { ui.label(""); }
-            ui.label(val(v.ops[i+1].amp_mod_en));
-            ui.label(val(v.ops[i+1].eg_bias_sens));
-            ui.label(val(v.ops[i+1].key_vel_sens));
+            ui.label(val(v.ops[op_idx].amp_mod_en));
+            ui.label(val(v.ops[op_idx].eg_bias_sens));
+            ui.label(val(v.ops[op_idx].key_vel_sens));
             ui.label(hdr(label));
             ui.end_row();
         }
@@ -130,17 +129,18 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
     ui.add_space(6.0);
 
     // ── Row 5-8: OSCILLATOR + ENVELOPE GENERATOR + KEY SCALING + PITCH EG ───
+    // Display order: OP4 (top) -> OP3 -> OP2 -> OP1 (bottom), Pitch EG on OP1 row
     ui.horizontal(|ui| {
         ui.add_space(66.0);
-        section_label(ui, "─ OSCILLATOR ─");
+        section_label(ui, "- OSCILLATOR -");
         ui.add_space(8.0);
-        section_label(ui, "────────────── ENVELOPE GENERATOR ──────────────");
+        section_label(ui, "-------------- ENVELOPE GENERATOR --------------");
         ui.add_space(20.0);
-        section_label(ui, "─ OPERATOR ─");
+        section_label(ui, "- OPERATOR -");
         ui.add_space(6.0);
-        section_label(ui, "── KEY SCALING ──");
+        section_label(ui, "-- KEY SCALING --");
         ui.add_space(4.0);
-        section_label(ui, "──────── PITCH ENVELOPE GENERATOR ────────");
+        section_label(ui, "-------- PITCH ENVELOPE GENERATOR --------");
     });
 
     Grid::new("op_hdr").num_columns(17).spacing(sp).show(ui, |ui| {
@@ -150,9 +150,10 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
         }
         ui.end_row();
 
-        let op_labels = ["OPERATOR1","OPERATOR2","OPERATOR3","OPERATOR4"];
-        for (i, op) in v.ops.iter().enumerate() {
-            ui.label(hdr(op_labels[i]));
+        // OP4 -> OP3 -> OP2 -> OP1
+        for (op_idx, label) in [(3usize,"OPERATOR4"),(2,"OPERATOR3"),(1,"OPERATOR2"),(0,"OPERATOR1")] {
+            let op = &v.ops[op_idx];
+            ui.label(hdr(label));
             ui.label(tbl(FREQ_TBL, op.freq_ratio));
             ui.label(tbl(DETUNE_TBL, op.detune));
             ui.label(val(op.ar));
@@ -163,8 +164,8 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
             ui.label(val(op.out_level));
             ui.label(val(op.kbd_rate_scl));
             ui.label(val(op.kbd_lev_scl));
-            // Pitch EG only on OP1 row
-            if i == 0 {
+            // Pitch EG on OPERATOR1 row only
+            if op_idx == 0 {
                 ui.label(val(v.pitch_eg_rate[0]));
                 ui.label(val(v.pitch_eg_level[0]));
                 ui.label(val(v.pitch_eg_rate[1]));
@@ -183,13 +184,13 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
         ui.add_space(60.0);
         section_label(ui, "PITCH BEND");
         ui.add_space(32.0);
-        section_label(ui, "──────── PORTAMENTO ────────");
+        section_label(ui, "-------- PORTAMENTO --------");
         ui.add_space(16.0);
-        section_label(ui, "──── FOOT CONTROL ────");
+        section_label(ui, "---- FOOT CONTROL ----");
         ui.add_space(16.0);
-        section_label(ui, "── WHEEL RANGE ──");
+        section_label(ui, "-- WHEEL RANGE --");
         ui.add_space(8.0);
-        section_label(ui, "────── BREATH CONTROLLER RANGE ──────");
+        section_label(ui, "------ BREATH CONTROLLER RANGE ------");
     });
 
     Grid::new("perf_hdr").num_columns(16).spacing(sp).show(ui, |ui| {
