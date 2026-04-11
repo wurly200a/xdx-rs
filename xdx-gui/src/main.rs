@@ -16,8 +16,9 @@ const FREQ_TBL: &[&str] = &[
     "15.70","16.96","17.27","17.30","18.37","18.84","19.03","19.78",
     "20.41","20.76","21.20","21.98","22.49","23.55","24.22","25.95",
 ];
-const DETUNE_TBL: &[&str] = &["-3","-2","-1","0","+1","+2","+3"];
-const LFO_WAVE_TBL: &[&str] = &["SAW","SQU","TRI","S/H"];
+const DETUNE_TBL:    &[&str] = &["-3","-2","-1","0","+1","+2","+3"];
+const LFO_WAVE_TBL:  &[&str] = &["SAW","SQU","TRI","S/H"];
+const ALGO_TBL:      &[&str] = &["1","2","3","4","5","6","7","8"];
 const TRANSPOSE_TBL: &[&str] = &[
     "C 1","C#1","D 1","D#1","E 1","F 1","F#1","G 1","G#1","A 1","A#1","B 1",
     "C 2","C#2","D 2","D#2","E 2","F 2","F#2","G 2","G#2","A 2","A#2","B 2",
@@ -25,36 +26,67 @@ const TRANSPOSE_TBL: &[&str] = &[
     "C 4","C#4","D 4","D#4","E 4","F 4","F#4","G 4","G#4","A 4","A#4","B 4","C 5",
 ];
 const PORTA_MODE_TBL: &[&str] = &["Full","Fing"];
-const ON_OFF_TBL: &[&str] = &["OFF","ON"];
-const POLY_MONO_TBL: &[&str] = &["POLY","MONO"];
+const ON_OFF_TBL:     &[&str] = &["OFF","ON"];
+const POLY_MONO_TBL:  &[&str] = &["POLY","MONO"];
 
-fn tbl<'a>(t: &[&'a str], v: u8) -> &'a str {
-    t.get(v as usize).copied().unwrap_or("?")
+// ── widget helpers ────────────────────────────────────────────────────────────
+
+/// DragValue for a u8 parameter with explicit range.
+fn dv(ui: &mut egui::Ui, val: &mut u8, min: u8, max: u8) {
+    ui.add(egui::DragValue::new(val).range(min..=max));
 }
+
+/// ComboBox backed by a &[&str] lookup table.
+fn cb(ui: &mut egui::Ui, id: impl std::hash::Hash, tbl: &[&str], val: &mut u8) {
+    let selected = tbl.get(*val as usize).copied().unwrap_or("?");
+    egui::ComboBox::from_id_source(id)
+        .selected_text(selected)
+        .width(52.0)
+        .show_ui(ui, |ui| {
+            for (i, &label) in tbl.iter().enumerate() {
+                ui.selectable_value(val, i as u8, label);
+            }
+        });
+}
+
+/// Checkbox for a 0/1 u8 parameter (no label).
+fn chk(ui: &mut egui::Ui, val: &mut u8) {
+    let mut b = *val != 0;
+    if ui.checkbox(&mut b, "").changed() {
+        *val = b as u8;
+    }
+}
+
+fn hdr(s: &str) -> RichText { RichText::new(s).strong().small() }
+
+fn section_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).strong().small().color(egui::Color32::from_gray(160)));
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("xdx - DX100/DX7 Editor")
-            .with_inner_size([1100.0, 560.0]),
+            .with_inner_size([1150.0, 580.0]),
         ..Default::default()
     };
     eframe::run_native("xdx", options, Box::new(|_cc| Ok(Box::new(App::new()))))
 }
 
 struct App {
-    voice: Dx100Voice,
+    voice:     Dx100Voice,
+    name_buf:  String,          // TextEdit buffer for voice name
     file_path: Option<PathBuf>,
-    status: String,
+    status:    String,
 }
 
 impl App {
     fn new() -> Self {
-        Self {
-            voice: dx100_decode_1voice(IVORY_EBONY_SYX).expect("decode failed"),
-            file_path: None,
-            status: "Test data loaded".to_string(),
-        }
+        let voice = dx100_decode_1voice(IVORY_EBONY_SYX).expect("decode failed");
+        let name_buf = voice.name_str();
+        Self { voice, name_buf, file_path: None, status: "Test data loaded".to_string() }
     }
 
     fn open_file(&mut self) {
@@ -68,6 +100,7 @@ impl App {
             Ok(bytes) => match dx100_decode_1voice(&bytes) {
                 Err(e) => self.status = format!("Decode failed: {e:?}"),
                 Ok(voice) => {
+                    self.name_buf = voice.name_str();
                     self.voice = voice;
                     self.status = format!("Opened: {}", path.display());
                     self.file_path = Some(path);
@@ -78,10 +111,8 @@ impl App {
 
     fn save_file(&mut self) {
         let path = if let Some(p) = &self.file_path {
-            // Already have a path — save directly (no dialog)
             p.clone()
         } else {
-            // No path yet — ask where to save
             let Some(p) = rfd::FileDialog::new()
                 .add_filter("SysEx", &["syx"])
                 .set_file_name(format!("{}.syx", self.voice.name_str().trim()))
@@ -89,15 +120,7 @@ impl App {
             else { return };
             p
         };
-
-        let bytes = dx100_encode_1voice(&self.voice, 0);
-        match std::fs::write(&path, &bytes) {
-            Err(e) => self.status = format!("Save failed: {e}"),
-            Ok(()) => {
-                self.status = format!("Saved: {}", path.display());
-                self.file_path = Some(path);
-            }
-        }
+        self.write_file(path);
     }
 
     fn save_as(&mut self) {
@@ -106,7 +129,10 @@ impl App {
             .set_file_name(format!("{}.syx", self.voice.name_str().trim()))
             .save_file()
         else { return };
+        self.write_file(path);
+    }
 
+    fn write_file(&mut self, path: PathBuf) {
         let bytes = dx100_encode_1voice(&self.voice, 0);
         match std::fs::write(&path, &bytes) {
             Err(e) => self.status = format!("Save failed: {e}"),
@@ -120,11 +146,10 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // ── Toolbar ──────────────────────────────────────────────────────────
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("Open").clicked() { self.open_file(); }
-                if ui.button("Save").clicked() { self.save_file(); }
+                if ui.button("Open").clicked()    { self.open_file(); }
+                if ui.button("Save").clicked()    { self.save_file(); }
                 if ui.button("Save As").clicked() { self.save_as(); }
                 ui.separator();
                 let filename = self.file_path.as_deref()
@@ -135,43 +160,41 @@ impl eframe::App for App {
             });
         });
 
-        // ── Status bar ───────────────────────────────────────────────────────
         egui::TopBottomPanel::bottom("statusbar").show(ctx, |ui| {
             ui.label(&self.status);
         });
 
-        // ── Main panel ───────────────────────────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::both().show(ui, |ui| {
-                show_dx100_voice(ui, &self.voice);
+                show_dx100_voice(ui, &mut self.voice, &mut self.name_buf);
             });
         });
     }
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-fn hdr(s: &str) -> RichText { RichText::new(s).strong().small() }
-fn val(s: impl ToString) -> String { s.to_string() }
+// ── main panel ────────────────────────────────────────────────────────────────
 
-fn section_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).strong().small().color(egui::Color32::from_gray(160)));
-}
-
-// ── main layout ───────────────────────────────────────────────────────────────
-fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
+fn show_dx100_voice(ui: &mut egui::Ui, v: &mut Dx100Voice, name_buf: &mut String) {
     let sp = [8.0_f32, 4.0_f32];
 
-    // ── Row 0: PATCHNAME ─────────────────────────────────────────────────────
+    // ── PATCHNAME ─────────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
         ui.label(hdr("PATCHNAME"));
-        ui.add(egui::Label::new(
-            RichText::new(v.name_str()).monospace().size(14.0)
-        ));
+        let resp = ui.add(
+            egui::TextEdit::singleline(name_buf)
+                .desired_width(88.0)
+                .font(egui::TextStyle::Monospace)
+        );
+        if resp.changed() {
+            name_buf.truncate(10);
+            for (i, b) in v.name.iter_mut().enumerate() {
+                *b = name_buf.as_bytes().get(i).copied().unwrap_or(b' ');
+            }
+        }
     });
     ui.add_space(4.0);
 
-    // ── Row 1-4: Global + per-operator AME / EG BIAS / VELOCITY ─────────────
-    // Display order: OP4 (top) -> OP3 -> OP2 -> OP1 (bottom), matching original
+    // ── Global + per-operator AME / EG BIAS / VELOCITY ───────────────────────
     ui.horizontal(|ui| {
         ui.add_space(120.0);
         section_label(ui, "-------------- LFO --------------");
@@ -181,36 +204,36 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
         section_label(ui, "-- KEY --");
     });
 
-    Grid::new("global_hdr").num_columns(14).spacing(sp).show(ui, |ui| {
+    Grid::new("global").num_columns(14).spacing(sp).show(ui, |ui| {
         for h in &["ALGORITHM","FEEDBACK","WAVE","SPEED","DELAY","PMD","AMD","SYNC",
                    "PITCH","AMPLITUDE","AME","EG BIAS","VELOCITY",""] {
             ui.label(hdr(h));
         }
         ui.end_row();
 
-        // First row: global params + OP4 sensitivity
-        ui.label(val(v.algorithm + 1));
-        ui.label(val(v.feedback));
-        ui.label(tbl(LFO_WAVE_TBL, v.lfo_wave));
-        ui.label(val(v.lfo_speed));
-        ui.label(val(v.lfo_delay));
-        ui.label(val(v.lfo_pmd));
-        ui.label(val(v.lfo_amd));
-        ui.label(tbl(ON_OFF_TBL, v.lfo_sync));
-        ui.label(val(v.pitch_mod_sens));
-        ui.label(val(v.amp_mod_sens));
-        ui.label(val(v.ops[3].amp_mod_en));
-        ui.label(val(v.ops[3].eg_bias_sens));
-        ui.label(val(v.ops[3].key_vel_sens));
+        // global values + OP4 sensitivity
+        cb(ui, "algo",    ALGO_TBL,     &mut v.algorithm);
+        dv(ui, &mut v.feedback,         0, 7);
+        cb(ui, "lfowave", LFO_WAVE_TBL, &mut v.lfo_wave);
+        dv(ui, &mut v.lfo_speed,        0, 99);
+        dv(ui, &mut v.lfo_delay,        0, 99);
+        dv(ui, &mut v.lfo_pmd,          0, 99);
+        dv(ui, &mut v.lfo_amd,          0, 99);
+        chk(ui, &mut v.lfo_sync);
+        dv(ui, &mut v.pitch_mod_sens,   0, 7);
+        dv(ui, &mut v.amp_mod_sens,     0, 3);
+        chk(ui, &mut v.ops[3].amp_mod_en);
+        dv(ui, &mut v.ops[3].eg_bias_sens, 0, 7);
+        dv(ui, &mut v.ops[3].key_vel_sens, 0, 7);
         ui.label(hdr("OPERATOR4"));
         ui.end_row();
 
-        // OP3, OP2, OP1 sensitivity (cols 0-9 empty)
-        for (op_idx, label) in [(2usize, "OPERATOR3"), (1, "OPERATOR2"), (0, "OPERATOR1")] {
+        // OP3, OP2, OP1 sensitivity
+        for (op_idx, label) in [(2usize,"OPERATOR3"),(1,"OPERATOR2"),(0,"OPERATOR1")] {
             for _ in 0..10 { ui.label(""); }
-            ui.label(val(v.ops[op_idx].amp_mod_en));
-            ui.label(val(v.ops[op_idx].eg_bias_sens));
-            ui.label(val(v.ops[op_idx].key_vel_sens));
+            chk(ui, &mut v.ops[op_idx].amp_mod_en);
+            dv(ui, &mut v.ops[op_idx].eg_bias_sens, 0, 7);
+            dv(ui, &mut v.ops[op_idx].key_vel_sens, 0, 7);
             ui.label(hdr(label));
             ui.end_row();
         }
@@ -218,8 +241,7 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
 
     ui.add_space(6.0);
 
-    // ── Row 5-8: OSCILLATOR + ENVELOPE GENERATOR + KEY SCALING + PITCH EG ───
-    // Display order: OP4 (top) -> OP3 -> OP2 -> OP1 (bottom), Pitch EG on OP1 row
+    // ── OSCILLATOR + EG + KEY SCALING + PITCH EG ─────────────────────────────
     ui.horizontal(|ui| {
         ui.add_space(66.0);
         section_label(ui, "- OSCILLATOR -");
@@ -233,35 +255,34 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
         section_label(ui, "-------- PITCH ENVELOPE GENERATOR --------");
     });
 
-    Grid::new("op_hdr").num_columns(17).spacing(sp).show(ui, |ui| {
+    Grid::new("operators").num_columns(17).spacing(sp).show(ui, |ui| {
         for h in &["","RATIO","DETUNE","AR","D1R","D1L","D2R","RR",
                    "OUT LEVEL","RATE","LEVEL","PR1","PL1","PR2","PL2","PR3","PL3"] {
             ui.label(hdr(h));
         }
         ui.end_row();
 
-        // OP4 -> OP3 -> OP2 -> OP1
         for (op_idx, label) in [(3usize,"OPERATOR4"),(2,"OPERATOR3"),(1,"OPERATOR2"),(0,"OPERATOR1")] {
-            let op = &v.ops[op_idx];
+            let op = &mut v.ops[op_idx];
             ui.label(hdr(label));
-            ui.label(tbl(FREQ_TBL, op.freq_ratio));
-            ui.label(tbl(DETUNE_TBL, op.detune));
-            ui.label(val(op.ar));
-            ui.label(val(op.d1r));
-            ui.label(val(op.d1l));
-            ui.label(val(op.d2r));
-            ui.label(val(op.rr));
-            ui.label(val(op.out_level));
-            ui.label(val(op.kbd_rate_scl));
-            ui.label(val(op.kbd_lev_scl));
+            cb(ui, ("freq",  op_idx), FREQ_TBL,   &mut op.freq_ratio);
+            cb(ui, ("det",   op_idx), DETUNE_TBL, &mut op.detune);
+            dv(ui, &mut op.ar,           0, 31);
+            dv(ui, &mut op.d1r,          0, 31);
+            dv(ui, &mut op.d1l,          0, 15);
+            dv(ui, &mut op.d2r,          0, 31);
+            dv(ui, &mut op.rr,           0, 15);
+            dv(ui, &mut op.out_level,    0, 99);
+            dv(ui, &mut op.kbd_rate_scl, 0,  3);
+            dv(ui, &mut op.kbd_lev_scl,  0, 99);
             // Pitch EG on OPERATOR1 row only
             if op_idx == 0 {
-                ui.label(val(v.pitch_eg_rate[0]));
-                ui.label(val(v.pitch_eg_level[0]));
-                ui.label(val(v.pitch_eg_rate[1]));
-                ui.label(val(v.pitch_eg_level[1]));
-                ui.label(val(v.pitch_eg_rate[2]));
-                ui.label(val(v.pitch_eg_level[2]));
+                dv(ui, &mut v.pitch_eg_rate[0],  0, 99);
+                dv(ui, &mut v.pitch_eg_level[0], 0, 99);
+                dv(ui, &mut v.pitch_eg_rate[1],  0, 99);
+                dv(ui, &mut v.pitch_eg_level[1], 0, 99);
+                dv(ui, &mut v.pitch_eg_rate[2],  0, 99);
+                dv(ui, &mut v.pitch_eg_level[2], 0, 99);
             }
             ui.end_row();
         }
@@ -269,7 +290,7 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
 
     ui.add_space(6.0);
 
-    // ── Row 9-10: Performance controls ───────────────────────────────────────
+    // ── Performance controls ──────────────────────────────────────────────────
     ui.horizontal(|ui| {
         ui.add_space(60.0);
         section_label(ui, "PITCH BEND");
@@ -283,30 +304,29 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &Dx100Voice) {
         section_label(ui, "------ BREATH CONTROLLER RANGE ------");
     });
 
-    Grid::new("perf_hdr").num_columns(16).spacing(sp).show(ui, |ui| {
+    Grid::new("perf").num_columns(15).spacing(sp).show(ui, |ui| {
         for h in &["POLY/MONO","RANGE","MODE","TIME","FOOT SW","VOLUME","SUSTAIN",
                    "PITCH","AMPLITUDE","PITCH","AMPLITUDE","PITCH BIAS","EG BIAS",
-                   "CHORUS","TRANSPOSE",""] {
+                   "CHORUS","TRANSPOSE"] {
             ui.label(hdr(h));
         }
         ui.end_row();
 
-        ui.label(tbl(POLY_MONO_TBL, v.poly_mono));
-        ui.label(val(v.pb_range));
-        ui.label(tbl(PORTA_MODE_TBL, v.porta_mode));
-        ui.label(val(v.porta_time));
-        ui.label(tbl(ON_OFF_TBL, v.portamento));
-        ui.label(val(v.fc_volume));
-        ui.label(tbl(ON_OFF_TBL, v.sustain));
-        ui.label(val(v.mw_pitch));
-        ui.label(val(v.mw_amplitude));
-        ui.label(val(v.bc_pitch));
-        ui.label(val(v.bc_amplitude));
-        ui.label(val(v.bc_pitch_bias));
-        ui.label(val(v.bc_eg_bias));
-        ui.label(tbl(ON_OFF_TBL, v.chorus));
-        ui.label(tbl(TRANSPOSE_TBL, v.transpose));
-        ui.label("");
+        cb(ui, "polymono",   POLY_MONO_TBL,  &mut v.poly_mono);
+        dv(ui, &mut v.pb_range,              0, 12);
+        cb(ui, "portamode",  PORTA_MODE_TBL, &mut v.porta_mode);
+        dv(ui, &mut v.porta_time,            0, 99);
+        chk(ui, &mut v.portamento);
+        dv(ui, &mut v.fc_volume,             0, 99);
+        chk(ui, &mut v.sustain);
+        dv(ui, &mut v.mw_pitch,             0, 99);
+        dv(ui, &mut v.mw_amplitude,         0, 99);
+        dv(ui, &mut v.bc_pitch,             0, 99);
+        dv(ui, &mut v.bc_amplitude,         0, 99);
+        dv(ui, &mut v.bc_pitch_bias,        0, 99);
+        dv(ui, &mut v.bc_eg_bias,           0, 99);
+        chk(ui, &mut v.chorus);
+        cb(ui, "transpose",  TRANSPOSE_TBL,  &mut v.transpose);
         ui.end_row();
     });
 }
