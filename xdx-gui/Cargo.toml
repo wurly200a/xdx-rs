@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 xdx-core = { path = "../xdx-core" }
 eframe = "0.28"
+rfd = "0.14"

@@ -1,6 +1,7 @@
 use eframe::egui::{self, Grid, RichText};
+use std::path::PathBuf;
 use xdx_core::dx100::Dx100Voice;
-use xdx_core::sysex::dx100_decode_1voice;
+use xdx_core::sysex::{dx100_decode_1voice, dx100_encode_1voice};
 
 static IVORY_EBONY_SYX: &[u8] = include_bytes!("../../testdata/syx/IvoryEbony.syx");
 
@@ -43,14 +44,103 @@ fn main() -> eframe::Result<()> {
 
 struct App {
     voice: Dx100Voice,
+    file_path: Option<PathBuf>,
+    status: String,
 }
+
 impl App {
     fn new() -> Self {
-        Self { voice: dx100_decode_1voice(IVORY_EBONY_SYX).expect("decode failed") }
+        Self {
+            voice: dx100_decode_1voice(IVORY_EBONY_SYX).expect("decode failed"),
+            file_path: None,
+            status: "Test data loaded".to_string(),
+        }
+    }
+
+    fn open_file(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("SysEx", &["syx"])
+            .pick_file()
+        else { return };
+
+        match std::fs::read(&path) {
+            Err(e) => self.status = format!("Open failed: {e}"),
+            Ok(bytes) => match dx100_decode_1voice(&bytes) {
+                Err(e) => self.status = format!("Decode failed: {e:?}"),
+                Ok(voice) => {
+                    self.voice = voice;
+                    self.status = format!("Opened: {}", path.display());
+                    self.file_path = Some(path);
+                }
+            },
+        }
+    }
+
+    fn save_file(&mut self) {
+        let path = if let Some(p) = &self.file_path {
+            // Already have a path — save directly (no dialog)
+            p.clone()
+        } else {
+            // No path yet — ask where to save
+            let Some(p) = rfd::FileDialog::new()
+                .add_filter("SysEx", &["syx"])
+                .set_file_name(format!("{}.syx", self.voice.name_str().trim()))
+                .save_file()
+            else { return };
+            p
+        };
+
+        let bytes = dx100_encode_1voice(&self.voice, 0);
+        match std::fs::write(&path, &bytes) {
+            Err(e) => self.status = format!("Save failed: {e}"),
+            Ok(()) => {
+                self.status = format!("Saved: {}", path.display());
+                self.file_path = Some(path);
+            }
+        }
+    }
+
+    fn save_as(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("SysEx", &["syx"])
+            .set_file_name(format!("{}.syx", self.voice.name_str().trim()))
+            .save_file()
+        else { return };
+
+        let bytes = dx100_encode_1voice(&self.voice, 0);
+        match std::fs::write(&path, &bytes) {
+            Err(e) => self.status = format!("Save failed: {e}"),
+            Ok(()) => {
+                self.status = format!("Saved: {}", path.display());
+                self.file_path = Some(path);
+            }
+        }
     }
 }
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ── Toolbar ──────────────────────────────────────────────────────────
+        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Open").clicked() { self.open_file(); }
+                if ui.button("Save").clicked() { self.save_file(); }
+                if ui.button("Save As").clicked() { self.save_as(); }
+                ui.separator();
+                let filename = self.file_path.as_deref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("(test data)");
+                ui.label(filename);
+            });
+        });
+
+        // ── Status bar ───────────────────────────────────────────────────────
+        egui::TopBottomPanel::bottom("statusbar").show(ctx, |ui| {
+            ui.label(&self.status);
+        });
+
+        // ── Main panel ───────────────────────────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::both().show(ui, |ui| {
                 show_dx100_voice(ui, &self.voice);
