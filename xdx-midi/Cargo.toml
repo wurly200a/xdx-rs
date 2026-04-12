@@ -3,5 +3,10 @@ name = "xdx-midi"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []                   # no default; callers must choose a backend
+real-midi    = ["dep:midir"]   # uses system MIDI (WinMM / CoreMIDI / ALSA)
+virtual-midi = []              # stub: no system deps, always succeeds
+
 [dependencies]
-midir = "0.10"
+midir = { version = "0.10", optional = true }

@@ -3,8 +3,13 @@ name = "xdx-gui"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default      = ["real-midi"]
+real-midi    = ["xdx-midi/real-midi"]    # system MIDI (WinMM / CoreMIDI / ALSA)
+virtual-midi = ["xdx-midi/virtual-midi"] # stub: no system deps
+
 [dependencies]
 xdx-core = { path = "../xdx-core" }
-xdx-midi = { path = "../xdx-midi" }
+xdx-midi = { path = "../xdx-midi", default-features = false }
 eframe = "0.28"
 rfd = "0.14"
