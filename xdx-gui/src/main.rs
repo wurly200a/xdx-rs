@@ -63,6 +63,17 @@ fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).strong().small().color(egui::Color32::from_gray(160)));
 }
 
+// ── Tab state enums ───────────────────────────────────────────────────────────
+
+#[derive(PartialEq)]
+enum SynthType { Dx100, Dx7 }
+
+#[derive(PartialEq)]
+enum VoiceMode { OneVoice, ThirtyTwo }
+
+#[derive(PartialEq)]
+enum ActiveTab { File, Synth }
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 fn main() -> eframe::Result<()> {
@@ -76,17 +87,30 @@ fn main() -> eframe::Result<()> {
 }
 
 struct App {
-    voice:     Dx100Voice,
-    name_buf:  String,          // TextEdit buffer for voice name
-    file_path: Option<PathBuf>,
-    status:    String,
+    // tab state
+    synth_type: SynthType,
+    voice_mode: VoiceMode,
+    active_tab: ActiveTab,
+    // voice data
+    voice:      Dx100Voice,
+    name_buf:   String,          // TextEdit buffer for voice name
+    file_path:  Option<PathBuf>,
+    status:     String,
 }
 
 impl App {
     fn new() -> Self {
         let voice = dx100_decode_1voice(IVORY_EBONY_SYX).expect("decode failed");
         let name_buf = voice.name_str();
-        Self { voice, name_buf, file_path: None, status: "Test data loaded".to_string() }
+        Self {
+            synth_type: SynthType::Dx100,
+            voice_mode: VoiceMode::OneVoice,
+            active_tab: ActiveTab::File,
+            voice,
+            name_buf,
+            file_path: None,
+            status: "Test data loaded".to_string(),
+        }
     }
 
     fn open_file(&mut self) {
@@ -147,16 +171,44 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+            // Row 1: synth type
             ui.horizontal(|ui| {
-                if ui.button("Open").clicked()    { self.open_file(); }
-                if ui.button("Save").clicked()    { self.save_file(); }
-                if ui.button("Save As").clicked() { self.save_as(); }
+                ui.label(hdr("SYNTH:"));
+                ui.selectable_value(&mut self.synth_type, SynthType::Dx100, "DX100");
+                ui.selectable_value(&mut self.synth_type, SynthType::Dx7,   "DX7");
+            });
+            ui.separator();
+            // Row 2: voice mode
+            ui.horizontal(|ui| {
+                ui.label(hdr("MODE:"));
+                ui.selectable_value(&mut self.voice_mode, VoiceMode::OneVoice, "1 VOICE");
+                ui.selectable_value(&mut self.voice_mode, VoiceMode::ThirtyTwo, "32 VOICES");
+            });
+            ui.separator();
+            // Row 3: function tabs + tab-specific controls
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.active_tab, ActiveTab::File,  "File");
+                ui.selectable_value(&mut self.active_tab, ActiveTab::Synth, "Synth");
                 ui.separator();
-                let filename = self.file_path.as_deref()
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("(test data)");
-                ui.label(filename);
+                match self.active_tab {
+                    ActiveTab::File => {
+                        if ui.button("Open").clicked()    { self.open_file(); }
+                        if ui.button("Save").clicked()    { self.save_file(); }
+                        if ui.button("Save As").clicked() { self.save_as(); }
+                        ui.separator();
+                        let filename = self.file_path.as_deref()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("(test data)");
+                        ui.label(filename);
+                    }
+                    ActiveTab::Synth => {
+                        ui.add_enabled(false, egui::Button::new("GET"));
+                        ui.add_enabled(false, egui::Button::new("SET"));
+                        ui.separator();
+                        ui.label(egui::RichText::new("MIDI not yet connected").weak());
+                    }
+                }
             });
         });
 
