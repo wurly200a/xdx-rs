@@ -97,6 +97,8 @@ struct App {
     midi_in_sel:    Option<String>,   // port name selected in Settings menu
     midi_out_sel:   Option<String>,
     show_midi_test: bool,
+    sysex_out_flash: f64,  // timestamp of last SysEx send (for indicator flash)
+    sysex_in_flash:  f64,  // timestamp of last SysEx receive
     // voice data
     voice:      Dx100Voice,
     name_buf:   String,          // TextEdit buffer for voice name
@@ -112,10 +114,12 @@ impl App {
             synth_type: SynthType::Dx100,
             voice_mode: VoiceMode::OneVoice,
             active_tab: ActiveTab::File,
-            midi_manager:   MidiManager::new(),
-            midi_in_sel:    None,
-            midi_out_sel:   None,
-            show_midi_test: false,
+            midi_manager:    MidiManager::new(),
+            midi_in_sel:     None,
+            midi_out_sel:    None,
+            show_midi_test:  false,
+            sysex_out_flash: f64::NEG_INFINITY,
+            sysex_in_flash:  f64::NEG_INFINITY,
             voice,
             name_buf,
             file_path: None,
@@ -176,24 +180,49 @@ impl App {
             }
         }
     }
+
+    /// Open MIDI OUT if not already connected; returns error string on failure.
+    fn ensure_out(&mut self) -> Result<(), String> {
+        if self.midi_manager.out_connected() { return Ok(()); }
+        let name = self.midi_out_sel.clone()
+            .ok_or_else(|| "No MIDI OUT device selected (Settings > MIDI OUT)".to_string())?;
+        self.midi_manager.open_out(&name).map_err(|e| e.to_string())
+    }
+
+    /// Open MIDI IN if not already connected; returns error string on failure.
+    fn ensure_in(&mut self) -> Result<(), String> {
+        if self.midi_manager.in_connected() { return Ok(()); }
+        let name = self.midi_in_sel.clone()
+            .ok_or_else(|| "No MIDI IN device selected (Settings > MIDI IN)".to_string())?;
+        self.midi_manager.open_in(&name).map_err(|e| e.to_string())
+    }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let now = ctx.input(|i| i.time);
+        const FLASH_SECS: f64 = 0.5;
+
         // ── Poll MIDI IN ──────────────────────────────────────────────────────
         while let Some(event) = self.midi_manager.try_recv() {
             if let MidiEvent::SysEx(bytes) = event {
+                self.sysex_in_flash = now;
                 match dx100_decode_1voice(&bytes) {
                     Ok(voice) => {
-                        self.name_buf = voice.name_str();
+                        let name = voice.name_str();
+                        self.name_buf = name.clone();
                         self.voice = voice;
-                        self.status = "Received voice from synth".to_string();
+                        self.status = format!("GET: received \"{name}\" from synth");
                     }
                     Err(e) => {
                         self.status = format!("SysEx decode error: {e:?}");
                     }
                 }
             }
+        }
+        // Keep repainting while any flash is active
+        if (now - self.sysex_in_flash) < FLASH_SECS || (now - self.sysex_out_flash) < FLASH_SECS {
+            ctx.request_repaint();
         }
 
         egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
@@ -270,39 +299,56 @@ impl eframe::App for App {
                         ui.label(filename);
                     }
                     ActiveTab::SysEx => {
-                        let in_ok  = self.midi_manager.in_connected();
-                        let out_ok = self.midi_manager.out_connected();
-
-                        // GET: needs OUT (to send request) + IN (to receive response)
-                        if ui.add_enabled(in_ok && out_ok, egui::Button::new("GET")).clicked() {
-                            // DX100 Parameter Request: F0 43 20 03 F7  (ch 1)
-                            match self.midi_manager.send(&[0xF0, 0x43, 0x20, 0x03, 0xF7]) {
-                                Ok(()) => self.status = "GET: request sent, waiting for response...".to_string(),
+                        // GET: auto-connect IN+OUT, send Parameter Request
+                        if ui.button("GET").clicked() {
+                            let result = self.ensure_out()
+                                .and_then(|_| self.ensure_in())
+                                .and_then(|_| self.midi_manager
+                                    .send(&[0xF0, 0x43, 0x20, 0x03, 0xF7])
+                                    .map_err(|e| e.to_string()));
+                            match result {
+                                Ok(()) => {
+                                    self.sysex_out_flash = now;
+                                    self.status = "GET: request sent, waiting for response...".to_string();
+                                }
                                 Err(e) => self.status = format!("GET failed: {e}"),
                             }
                         }
-                        // SET: only needs OUT
-                        if ui.add_enabled(out_ok, egui::Button::new("SET")).clicked() {
+                        // SET: auto-connect OUT, send bulk dump
+                        if ui.button("SET").clicked() {
                             let bytes = dx100_encode_1voice(&self.voice, 0);
-                            match self.midi_manager.send(&bytes) {
-                                Ok(()) => self.status = format!("SET: sent \"{}\" to synth", self.voice.name_str()),
+                            let result = self.ensure_out()
+                                .and_then(|_| self.midi_manager.send(&bytes)
+                                    .map_err(|e| e.to_string()));
+                            match result {
+                                Ok(()) => {
+                                    self.sysex_out_flash = now;
+                                    self.status = format!("SET: sent \"{}\" to synth", self.voice.name_str());
+                                }
                                 Err(e) => self.status = format!("SET failed: {e}"),
                             }
                         }
                         ui.separator();
-                        // Connection status indicators
-                        let dot = |connected: bool| -> RichText {
-                            if connected {
-                                RichText::new("●").color(Color32::GREEN)
-                            } else {
-                                RichText::new("○").color(Color32::GRAY)
-                            }
+                        // Connection indicators: green=connected, yellow=flash, gray=idle
+                        let in_flash  = (now - self.sysex_in_flash)  < FLASH_SECS;
+                        let out_flash = (now - self.sysex_out_flash) < FLASH_SECS;
+                        let dot = |connected: bool, flash: bool| -> RichText {
+                            let color = if flash      { Color32::YELLOW }
+                                        else if connected { Color32::GREEN }
+                                        else              { Color32::from_gray(110) };
+                            RichText::new("●").color(color)
                         };
-                        let in_name  = self.midi_manager.in_port_name.as_deref().unwrap_or("(not connected)");
-                        let out_name = self.midi_manager.out_port_name.as_deref().unwrap_or("(not connected)");
-                        ui.label(dot(in_ok));
+                        let in_name = self.midi_manager.in_port_name.as_deref()
+                            .or(self.midi_in_sel.as_deref())
+                            .unwrap_or("(none)");
+                        let out_name = self.midi_manager.out_port_name.as_deref()
+                            .or(self.midi_out_sel.as_deref())
+                            .unwrap_or("(none)");
+                        let in_ok  = self.midi_manager.in_connected();
+                        let out_ok = self.midi_manager.out_connected();
+                        ui.label(dot(in_ok,  in_flash));
                         ui.label(format!("IN: {in_name}"));
-                        ui.label(dot(out_ok));
+                        ui.label(dot(out_ok, out_flash));
                         ui.label(format!("OUT: {out_name}"));
                     }
                 }
@@ -315,6 +361,7 @@ impl eframe::App for App {
 
         // ── MIDI Device Test window ───────────────────────────────────────────
         // Use a local copy to avoid simultaneous borrow of self + bool ref.
+        // When the window is closed, auto-close MIDI connections (test only).
         let mut show_midi_test = self.show_midi_test;
         if show_midi_test {
             egui::Window::new("MIDI Device Test")
@@ -368,6 +415,11 @@ impl eframe::App for App {
                         ui.end_row();
                     });
                 });
+        }
+        if self.show_midi_test && !show_midi_test {
+            // Window just closed — disconnect all test connections
+            self.midi_manager.close_in();
+            self.midi_manager.close_out();
         }
         self.show_midi_test = show_midi_test;
 
