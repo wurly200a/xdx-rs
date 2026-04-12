@@ -218,6 +218,9 @@ impl eframe::App for App {
                         self.status = format!("SysEx decode error: {e:?}");
                     }
                 }
+                // GET sequence complete — close connections
+                self.midi_manager.close_in();
+                self.midi_manager.close_out();
             }
         }
         // Keep repainting while any flash is active
@@ -314,7 +317,7 @@ impl eframe::App for App {
                                 Err(e) => self.status = format!("GET failed: {e}"),
                             }
                         }
-                        // SET: auto-connect OUT, send bulk dump
+                        // SET: auto-connect OUT, send bulk dump, then close
                         if ui.button("SET").clicked() {
                             let bytes = dx100_encode_1voice(&self.voice, 0);
                             let result = self.ensure_out()
@@ -327,6 +330,9 @@ impl eframe::App for App {
                                 }
                                 Err(e) => self.status = format!("SET failed: {e}"),
                             }
+                            // SET sequence complete — close connections
+                            self.midi_manager.close_in();
+                            self.midi_manager.close_out();
                         }
                         ui.separator();
                         // Connection indicators: green=connected, yellow=flash, gray=idle
