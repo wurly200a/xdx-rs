@@ -1,7 +1,8 @@
 # Workspace-level Cargo configuration
 
 [alias]
-# Build with virtual MIDI stub (no system MIDI libs needed — for WSL2 / CI)
+# Build/run with virtual MIDI stub (no system MIDI libs needed — for WSL2 / CI)
 build-stub = "build --no-default-features --features virtual-midi"
+run-stub   = "run   --no-default-features --features virtual-midi"
 check-stub = "check --no-default-features --features virtual-midi"
 test-stub  = "test  --no-default-features --features virtual-midi"
