@@ -185,11 +185,14 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.voice_mode, VoiceMode::ThirtyTwo, "32 VOICES");
             });
             ui.separator();
-            // Row 3: function tabs + tab-specific controls
+            // Row 3: function tabs only
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, ActiveTab::File,  "File");
                 ui.selectable_value(&mut self.active_tab, ActiveTab::Synth, "Synth");
-                ui.separator();
+            });
+            ui.separator();
+            // Row 4: tab-specific controls
+            ui.horizontal(|ui| {
                 match self.active_tab {
                     ActiveTab::File => {
                         if ui.button("Open").clicked()    { self.open_file(); }
