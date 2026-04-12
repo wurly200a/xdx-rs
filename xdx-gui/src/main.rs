@@ -91,6 +91,11 @@ struct App {
     synth_type: SynthType,
     voice_mode: VoiceMode,
     active_tab: ActiveTab,
+    // MIDI device selection (index into midi_in/out_devices)
+    midi_in_devices:  Vec<String>,
+    midi_out_devices: Vec<String>,
+    midi_in_sel:  Option<usize>,
+    midi_out_sel: Option<usize>,
     // voice data
     voice:      Dx100Voice,
     name_buf:   String,          // TextEdit buffer for voice name
@@ -106,6 +111,10 @@ impl App {
             synth_type: SynthType::Dx100,
             voice_mode: VoiceMode::OneVoice,
             active_tab: ActiveTab::File,
+            midi_in_devices:  vec!["(no devices found)".to_string()],
+            midi_out_devices: vec!["(no devices found)".to_string()],
+            midi_in_sel:  None,
+            midi_out_sel: None,
             voice,
             name_buf,
             file_path: None,
@@ -170,6 +179,31 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("Settings", |ui| {
+                    ui.menu_button("MIDI IN", |ui| {
+                        for (i, name) in self.midi_in_devices.iter().enumerate() {
+                            let selected = self.midi_in_sel == Some(i);
+                            if ui.selectable_label(selected, name).clicked() {
+                                self.midi_in_sel = if selected { None } else { Some(i) };
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.menu_button("MIDI OUT", |ui| {
+                        for (i, name) in self.midi_out_devices.iter().enumerate() {
+                            let selected = self.midi_out_sel == Some(i);
+                            if ui.selectable_label(selected, name).clicked() {
+                                self.midi_out_sel = if selected { None } else { Some(i) };
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                });
+            });
+        });
+
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             // Row 1: synth type
             ui.horizontal(|ui| {
