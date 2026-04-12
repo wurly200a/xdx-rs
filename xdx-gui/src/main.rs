@@ -73,7 +73,7 @@ enum SynthType { Dx100, Dx7 }
 enum VoiceMode { OneVoice, ThirtyTwo }
 
 #[derive(PartialEq)]
-enum ActiveTab { File, Synth }
+enum ActiveTab { File, SysEx }
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
@@ -252,7 +252,7 @@ impl eframe::App for App {
             // Row 3: function tabs only
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, ActiveTab::File,  "File");
-                ui.selectable_value(&mut self.active_tab, ActiveTab::Synth, "Synth");
+                ui.selectable_value(&mut self.active_tab, ActiveTab::SysEx, "SysEx");
             });
             ui.separator();
             // Row 4: tab-specific controls
@@ -269,24 +269,41 @@ impl eframe::App for App {
                             .unwrap_or("(test data)");
                         ui.label(filename);
                     }
-                    ActiveTab::Synth => {
+                    ActiveTab::SysEx => {
+                        let in_ok  = self.midi_manager.in_connected();
                         let out_ok = self.midi_manager.out_connected();
-                        if ui.add_enabled(out_ok, egui::Button::new("GET")).clicked() {
-                            // DX100 Parameter Request: F0 43 20 03 F7
-                            if let Err(e) = self.midi_manager.send(&[0xF0, 0x43, 0x20, 0x03, 0xF7]) {
-                                self.status = format!("GET failed: {e}");
+
+                        // GET: needs OUT (to send request) + IN (to receive response)
+                        if ui.add_enabled(in_ok && out_ok, egui::Button::new("GET")).clicked() {
+                            // DX100 Parameter Request: F0 43 20 03 F7  (ch 1)
+                            match self.midi_manager.send(&[0xF0, 0x43, 0x20, 0x03, 0xF7]) {
+                                Ok(()) => self.status = "GET: request sent, waiting for response...".to_string(),
+                                Err(e) => self.status = format!("GET failed: {e}"),
                             }
                         }
+                        // SET: only needs OUT
                         if ui.add_enabled(out_ok, egui::Button::new("SET")).clicked() {
                             let bytes = dx100_encode_1voice(&self.voice, 0);
-                            if let Err(e) = self.midi_manager.send(&bytes) {
-                                self.status = format!("SET failed: {e}");
+                            match self.midi_manager.send(&bytes) {
+                                Ok(()) => self.status = format!("SET: sent \"{}\" to synth", self.voice.name_str()),
+                                Err(e) => self.status = format!("SET failed: {e}"),
                             }
                         }
                         ui.separator();
-                        let in_name  = self.midi_manager.in_port_name.as_deref().unwrap_or("-");
-                        let out_name = self.midi_manager.out_port_name.as_deref().unwrap_or("-");
-                        ui.label(format!("IN: {in_name}  OUT: {out_name}"));
+                        // Connection status indicators
+                        let dot = |connected: bool| -> RichText {
+                            if connected {
+                                RichText::new("●").color(Color32::GREEN)
+                            } else {
+                                RichText::new("○").color(Color32::GRAY)
+                            }
+                        };
+                        let in_name  = self.midi_manager.in_port_name.as_deref().unwrap_or("(not connected)");
+                        let out_name = self.midi_manager.out_port_name.as_deref().unwrap_or("(not connected)");
+                        ui.label(dot(in_ok));
+                        ui.label(format!("IN: {in_name}"));
+                        ui.label(dot(out_ok));
+                        ui.label(format!("OUT: {out_name}"));
                     }
                 }
             });
