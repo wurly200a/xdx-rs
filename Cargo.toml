@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "xdx-core",
+    "xdx-midi",
     "xdx-gui",
 ]
 resolver = "2"

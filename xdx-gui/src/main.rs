@@ -1,7 +1,8 @@
-use eframe::egui::{self, Grid, RichText};
+use eframe::egui::{self, Color32, Grid, RichText};
 use std::path::PathBuf;
 use xdx_core::dx100::Dx100Voice;
 use xdx_core::sysex::{dx100_decode_1voice, dx100_encode_1voice};
+use xdx_midi::{MidiEvent, MidiManager};
 
 static IVORY_EBONY_SYX: &[u8] = include_bytes!("../../testdata/syx/IvoryEbony.syx");
 
@@ -91,11 +92,11 @@ struct App {
     synth_type: SynthType,
     voice_mode: VoiceMode,
     active_tab: ActiveTab,
-    // MIDI device selection (index into midi_in/out_devices)
-    midi_in_devices:  Vec<String>,
-    midi_out_devices: Vec<String>,
-    midi_in_sel:  Option<usize>,
-    midi_out_sel: Option<usize>,
+    // MIDI
+    midi_manager:   MidiManager,
+    midi_in_sel:    Option<String>,   // port name selected in Settings menu
+    midi_out_sel:   Option<String>,
+    show_midi_test: bool,
     // voice data
     voice:      Dx100Voice,
     name_buf:   String,          // TextEdit buffer for voice name
@@ -111,10 +112,10 @@ impl App {
             synth_type: SynthType::Dx100,
             voice_mode: VoiceMode::OneVoice,
             active_tab: ActiveTab::File,
-            midi_in_devices:  vec!["(no devices found)".to_string()],
-            midi_out_devices: vec!["(no devices found)".to_string()],
-            midi_in_sel:  None,
-            midi_out_sel: None,
+            midi_manager:   MidiManager::new(),
+            midi_in_sel:    None,
+            midi_out_sel:   None,
+            show_midi_test: false,
             voice,
             name_buf,
             file_path: None,
@@ -179,27 +180,56 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ── Poll MIDI IN ──────────────────────────────────────────────────────
+        while let Some(event) = self.midi_manager.try_recv() {
+            if let MidiEvent::SysEx(bytes) = event {
+                match dx100_decode_1voice(&bytes) {
+                    Ok(voice) => {
+                        self.name_buf = voice.name_str();
+                        self.voice = voice;
+                        self.status = "Received voice from synth".to_string();
+                    }
+                    Err(e) => {
+                        self.status = format!("SysEx decode error: {e:?}");
+                    }
+                }
+            }
+        }
+
         egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("Settings", |ui| {
                     ui.menu_button("MIDI IN", |ui| {
-                        for (i, name) in self.midi_in_devices.iter().enumerate() {
-                            let selected = self.midi_in_sel == Some(i);
-                            if ui.selectable_label(selected, name).clicked() {
-                                self.midi_in_sel = if selected { None } else { Some(i) };
+                        let ports = MidiManager::list_in_ports();
+                        if ports.is_empty() {
+                            ui.weak("(no devices found)");
+                        }
+                        for name in ports {
+                            let sel = self.midi_in_sel.as_deref() == Some(name.as_str());
+                            if ui.selectable_label(sel, &name).clicked() {
+                                self.midi_in_sel = if sel { None } else { Some(name) };
                                 ui.close_menu();
                             }
                         }
                     });
                     ui.menu_button("MIDI OUT", |ui| {
-                        for (i, name) in self.midi_out_devices.iter().enumerate() {
-                            let selected = self.midi_out_sel == Some(i);
-                            if ui.selectable_label(selected, name).clicked() {
-                                self.midi_out_sel = if selected { None } else { Some(i) };
+                        let ports = MidiManager::list_out_ports();
+                        if ports.is_empty() {
+                            ui.weak("(no devices found)");
+                        }
+                        for name in ports {
+                            let sel = self.midi_out_sel.as_deref() == Some(name.as_str());
+                            if ui.selectable_label(sel, &name).clicked() {
+                                self.midi_out_sel = if sel { None } else { Some(name) };
                                 ui.close_menu();
                             }
                         }
                     });
+                    ui.separator();
+                    if ui.button("MIDI Device Test").clicked() {
+                        self.show_midi_test = true;
+                        ui.close_menu();
+                    }
                 });
             });
         });
@@ -240,10 +270,23 @@ impl eframe::App for App {
                         ui.label(filename);
                     }
                     ActiveTab::Synth => {
-                        ui.add_enabled(false, egui::Button::new("GET"));
-                        ui.add_enabled(false, egui::Button::new("SET"));
+                        let out_ok = self.midi_manager.out_connected();
+                        if ui.add_enabled(out_ok, egui::Button::new("GET")).clicked() {
+                            // DX100 Parameter Request: F0 43 20 03 F7
+                            if let Err(e) = self.midi_manager.send(&[0xF0, 0x43, 0x20, 0x03, 0xF7]) {
+                                self.status = format!("GET failed: {e}");
+                            }
+                        }
+                        if ui.add_enabled(out_ok, egui::Button::new("SET")).clicked() {
+                            let bytes = dx100_encode_1voice(&self.voice, 0);
+                            if let Err(e) = self.midi_manager.send(&bytes) {
+                                self.status = format!("SET failed: {e}");
+                            }
+                        }
                         ui.separator();
-                        ui.label(egui::RichText::new("MIDI not yet connected").weak());
+                        let in_name  = self.midi_manager.in_port_name.as_deref().unwrap_or("-");
+                        let out_name = self.midi_manager.out_port_name.as_deref().unwrap_or("-");
+                        ui.label(format!("IN: {in_name}  OUT: {out_name}"));
                     }
                 }
             });
@@ -252,6 +295,64 @@ impl eframe::App for App {
         egui::TopBottomPanel::bottom("statusbar").show(ctx, |ui| {
             ui.label(&self.status);
         });
+
+        // ── MIDI Device Test window ───────────────────────────────────────────
+        // Use a local copy to avoid simultaneous borrow of self + bool ref.
+        let mut show_midi_test = self.show_midi_test;
+        if show_midi_test {
+            egui::Window::new("MIDI Device Test")
+                .resizable(false)
+                .collapsible(false)
+                .open(&mut show_midi_test)
+                .show(ctx, |ui| {
+                    Grid::new("midi_test_grid").num_columns(4).spacing([8.0, 6.0]).show(ui, |ui| {
+                        // ── MIDI IN row ───────────────────────────────────────
+                        ui.label(hdr("MIDI IN"));
+                        let in_name = self.midi_in_sel.as_deref().unwrap_or("(not selected)");
+                        ui.label(in_name);
+                        if self.midi_manager.in_connected() {
+                            if ui.button("Close").clicked() {
+                                self.midi_manager.close_in();
+                            }
+                            ui.label(RichText::new("OK").color(Color32::GREEN).strong());
+                        } else {
+                            let can = self.midi_in_sel.is_some();
+                            if ui.add_enabled(can, egui::Button::new("Open")).clicked() {
+                                if let Some(name) = self.midi_in_sel.clone() {
+                                    if let Err(e) = self.midi_manager.open_in(&name) {
+                                        self.status = format!("MIDI IN open failed: {e}");
+                                    }
+                                }
+                            }
+                            ui.label(RichText::new("--").weak());
+                        }
+                        ui.end_row();
+
+                        // ── MIDI OUT row ──────────────────────────────────────
+                        ui.label(hdr("MIDI OUT"));
+                        let out_name = self.midi_out_sel.as_deref().unwrap_or("(not selected)");
+                        ui.label(out_name);
+                        if self.midi_manager.out_connected() {
+                            if ui.button("Close").clicked() {
+                                self.midi_manager.close_out();
+                            }
+                            ui.label(RichText::new("OK").color(Color32::GREEN).strong());
+                        } else {
+                            let can = self.midi_out_sel.is_some();
+                            if ui.add_enabled(can, egui::Button::new("Open")).clicked() {
+                                if let Some(name) = self.midi_out_sel.clone() {
+                                    if let Err(e) = self.midi_manager.open_out(&name) {
+                                        self.status = format!("MIDI OUT open failed: {e}");
+                                    }
+                                }
+                            }
+                            ui.label(RichText::new("--").weak());
+                        }
+                        ui.end_row();
+                    });
+                });
+        }
+        self.show_midi_test = show_midi_test;
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::both().show(ui, |ui| {
