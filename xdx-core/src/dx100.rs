@@ -53,6 +53,42 @@ pub struct Dx100Voice {
     pub pitch_eg_level: [u8; 3], // PEG Level 1-3 (0-99)
 }
 
+impl Default for Dx100Operator {
+    fn default() -> Self {
+        Self {
+            ar: 0, d1r: 0, d2r: 0, rr: 0, d1l: 0,
+            kbd_lev_scl: 0, kbd_rate_scl: 0,
+            eg_bias_sens: 0, amp_mod_en: 0, key_vel_sens: 0,
+            out_level: 0, freq_ratio: 0, detune: 3,
+        }
+    }
+}
+
+impl Default for Dx100Voice {
+    fn default() -> Self {
+        Self {
+            ops: [
+                Dx100Operator::default(),
+                Dx100Operator::default(),
+                Dx100Operator::default(),
+                Dx100Operator::default(),
+            ],
+            algorithm: 0, feedback: 0,
+            lfo_speed: 0, lfo_delay: 0, lfo_pmd: 0, lfo_amd: 0,
+            lfo_sync: 0, lfo_wave: 0,
+            pitch_mod_sens: 0, amp_mod_sens: 0,
+            transpose: 24, poly_mono: 0,
+            pb_range: 0, porta_mode: 0, porta_time: 0,
+            fc_volume: 0, sustain: 0, portamento: 0, chorus: 0,
+            mw_pitch: 0, mw_amplitude: 0,
+            bc_pitch: 0, bc_amplitude: 0, bc_pitch_bias: 0, bc_eg_bias: 0,
+            name: *b"INIT      ",
+            pitch_eg_rate: [0, 0, 0],
+            pitch_eg_level: [0, 0, 0],
+        }
+    }
+}
+
 impl Dx100Voice {
     pub fn name_str(&self) -> String {
         self.name.iter()

@@ -91,6 +91,204 @@ pub fn dx100_encode_1voice(voice: &Dx100Voice, channel: u8) -> Vec<u8> {
     out
 }
 
+// ── DX100 32-voice bulk dump (4104 bytes total) ───────────────────────────────
+// F0 43 0n 04 20 00 <4096 bytes payload> <checksum> F7
+//
+// Payload: 32 × 128-byte VMEM blocks (only first 73 bytes are real data)
+//
+// VMEM layout per voice (128 bytes, significant bytes 0-72):
+//   [00-05]  OP4: ar, d1r, d2r, rr, d1l, kbd_lev_scl
+//   [06]     OP4: (amp_mod_en<<6)|(eg_bias_sens<<3)|key_vel_sens
+//   [07]     OP4: out_level
+//   [08]     OP4: freq_ratio
+//   [09]     OP4: (kbd_rate_scl<<3)|detune
+//   [10-15]  OP2: ar, d1r, d2r, rr, d1l, kbd_lev_scl
+//   [16]     OP2: (amp_mod_en<<6)|(eg_bias_sens<<3)|key_vel_sens
+//   [17]     OP2: out_level
+//   [18]     OP2: freq_ratio
+//   [19]     OP2: (kbd_rate_scl<<3)|detune
+//   [20-25]  OP3: ar, d1r, d2r, rr, d1l, kbd_lev_scl
+//   [26]     OP3: (amp_mod_en<<6)|(eg_bias_sens<<3)|key_vel_sens
+//   [27]     OP3: out_level
+//   [28]     OP3: freq_ratio
+//   [29]     OP3: (kbd_rate_scl<<3)|detune
+//   [30-35]  OP1: ar, d1r, d2r, rr, d1l, kbd_lev_scl
+//   [36]     OP1: (amp_mod_en<<6)|(eg_bias_sens<<3)|key_vel_sens
+//   [37]     OP1: out_level
+//   [38]     OP1: freq_ratio
+//   [39]     OP1: (kbd_rate_scl<<3)|detune
+//   [40]     (lfo_sync<<6)|(feedback<<3)|algorithm
+//   [41]     lfo_speed
+//   [42]     lfo_delay
+//   [43]     lfo_pmd
+//   [44]     lfo_amd
+//   [45]     (pitch_mod_sens<<4)|(amp_mod_sens<<2)|lfo_wave
+//   [46]     transpose
+//   [47]     pb_range
+//   [48]     (chorus<<4)|(poly_mono<<3)|(sustain<<2)|(portamento<<1)|porta_mode
+//   [49]     porta_time
+//   [50]     fc_volume
+//   [51]     mw_pitch
+//   [52]     mw_amplitude
+//   [53]     bc_pitch
+//   [54]     bc_amplitude
+//   [55]     bc_pitch_bias
+//   [56]     bc_eg_bias
+//   [57-66]  name (10 ASCII bytes)
+//   [67-69]  pitch_eg_rate[0..2]
+//   [70-72]  pitch_eg_level[0..2]
+//   [73-127] dummy/reserved (zeros)
+
+const DX100_32VOICE_PAYLOAD_LEN: u16 = 4096; // 0x2000
+const DX100_32VOICE_TOTAL_LEN:   usize = 4104;
+const DX100_VMEM_SIZE:           usize = 128;
+
+pub fn dx100_decode_32voice(data: &[u8]) -> Result<Vec<Dx100Voice>, SysExError> {
+    if data.len() < DX100_32VOICE_TOTAL_LEN {
+        return Err(SysExError::TooShort);
+    }
+    if data[0] != 0xF0 || data[1] != 0x43 || data[3] != 0x04 {
+        return Err(SysExError::InvalidHeader);
+    }
+    if data[DX100_32VOICE_TOTAL_LEN - 1] != 0xF7 {
+        return Err(SysExError::InvalidFooter);
+    }
+    let byte_count = ((data[4] as u16) << 7) | (data[5] as u16);
+    if byte_count != DX100_32VOICE_PAYLOAD_LEN {
+        return Err(SysExError::InvalidByteCount {
+            expected: DX100_32VOICE_PAYLOAD_LEN,
+            actual: byte_count,
+        });
+    }
+    let payload = &data[6..6 + DX100_32VOICE_PAYLOAD_LEN as usize];
+    verify_checksum(payload, data[6 + DX100_32VOICE_PAYLOAD_LEN as usize])?;
+
+    let voices = (0..32)
+        .map(|i| vmem_to_voice(&payload[i * DX100_VMEM_SIZE..]))
+        .collect();
+    Ok(voices)
+}
+
+pub fn dx100_encode_32voice(voices: &[Dx100Voice], channel: u8) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(DX100_32VOICE_PAYLOAD_LEN as usize);
+    for i in 0..32 {
+        let vmem = voice_to_vmem(voices.get(i).unwrap_or(&Dx100Voice::default()));
+        payload.extend_from_slice(&vmem);
+    }
+    let checksum = calc_checksum(&payload);
+    let mut out = vec![
+        0xF0, 0x43, 0x00 | (channel & 0x0F), 0x04,
+        0x20, 0x00,
+    ];
+    out.extend_from_slice(&payload);
+    out.push(checksum);
+    out.push(0xF7);
+    out
+}
+
+fn vmem_to_voice(v: &[u8]) -> Dx100Voice {
+    let op = |base: usize| Dx100Operator {
+        ar:           v[base],
+        d1r:          v[base + 1],
+        d2r:          v[base + 2],
+        rr:           v[base + 3],
+        d1l:          v[base + 4],
+        kbd_lev_scl:  v[base + 5],
+        amp_mod_en:   (v[base + 6] >> 6) & 0x1,
+        eg_bias_sens: (v[base + 6] >> 3) & 0x7,
+        key_vel_sens:  v[base + 6]        & 0x7,
+        out_level:     v[base + 7],
+        freq_ratio:    v[base + 8],
+        kbd_rate_scl: (v[base + 9] >> 3) & 0x1F,
+        detune:        v[base + 9]        & 0x7,
+    };
+    Dx100Voice {
+        ops: [op(30), op(10), op(20), op(0)], // [OP1, OP2, OP3, OP4]
+        algorithm:      v[40] & 0x7,
+        feedback:      (v[40] >> 3) & 0x7,
+        lfo_sync:      (v[40] >> 6) & 0x3,
+        lfo_speed:      v[41],
+        lfo_delay:      v[42],
+        lfo_pmd:        v[43],
+        lfo_amd:        v[44],
+        lfo_wave:       v[45] & 0x3,
+        amp_mod_sens:  (v[45] >> 2) & 0x3,
+        pitch_mod_sens:(v[45] >> 4) & 0x7,
+        transpose:      v[46],
+        pb_range:       v[47],
+        porta_mode:     v[48] & 0x1,
+        portamento:    (v[48] >> 1) & 0x1,
+        sustain:       (v[48] >> 2) & 0x1,
+        poly_mono:     (v[48] >> 3) & 0x1,
+        chorus:        (v[48] >> 4) & 0x1,
+        porta_time:     v[49],
+        fc_volume:      v[50],
+        mw_pitch:       v[51],
+        mw_amplitude:   v[52],
+        bc_pitch:       v[53],
+        bc_amplitude:   v[54],
+        bc_pitch_bias:  v[55],
+        bc_eg_bias:     v[56],
+        name:           v[57..67].try_into().unwrap(),
+        pitch_eg_rate:  [v[67], v[68], v[69]],
+        pitch_eg_level: [v[70], v[71], v[72]],
+    }
+}
+
+fn voice_to_vmem(v: &Dx100Voice) -> [u8; DX100_VMEM_SIZE] {
+    let mut m = [0u8; DX100_VMEM_SIZE];
+    // op_base: (vmem_offset, ops_index)  order: OP4=ops[3], OP2=ops[1], OP3=ops[2], OP1=ops[0]
+    for (base, idx) in [(0, 3), (10, 1), (20, 2), (30, 0)] {
+        let op = &v.ops[idx];
+        m[base]     = op.ar;
+        m[base + 1] = op.d1r;
+        m[base + 2] = op.d2r;
+        m[base + 3] = op.rr;
+        m[base + 4] = op.d1l;
+        m[base + 5] = op.kbd_lev_scl;
+        m[base + 6] = ((op.amp_mod_en   & 0x1) << 6)
+                    | ((op.eg_bias_sens  & 0x7) << 3)
+                    |  (op.key_vel_sens  & 0x7);
+        m[base + 7] = op.out_level;
+        m[base + 8] = op.freq_ratio;
+        m[base + 9] = ((op.kbd_rate_scl & 0x1F) << 3)
+                    |  (op.detune        & 0x7);
+    }
+    m[40] = ((v.lfo_sync  & 0x3) << 6)
+          | ((v.feedback  & 0x7) << 3)
+          |  (v.algorithm & 0x7);
+    m[41] = v.lfo_speed;
+    m[42] = v.lfo_delay;
+    m[43] = v.lfo_pmd;
+    m[44] = v.lfo_amd;
+    m[45] = ((v.pitch_mod_sens & 0x7) << 4)
+          | ((v.amp_mod_sens   & 0x3) << 2)
+          |  (v.lfo_wave       & 0x3);
+    m[46] = v.transpose;
+    m[47] = v.pb_range;
+    m[48] = ((v.chorus     & 0x1) << 4)
+          | ((v.poly_mono  & 0x1) << 3)
+          | ((v.sustain    & 0x1) << 2)
+          | ((v.portamento & 0x1) << 1)
+          |  (v.porta_mode & 0x1);
+    m[49] = v.porta_time;
+    m[50] = v.fc_volume;
+    m[51] = v.mw_pitch;
+    m[52] = v.mw_amplitude;
+    m[53] = v.bc_pitch;
+    m[54] = v.bc_amplitude;
+    m[55] = v.bc_pitch_bias;
+    m[56] = v.bc_eg_bias;
+    m[57..67].copy_from_slice(&v.name);
+    m[67] = v.pitch_eg_rate[0];
+    m[68] = v.pitch_eg_rate[1];
+    m[69] = v.pitch_eg_rate[2];
+    m[70] = v.pitch_eg_level[0];
+    m[71] = v.pitch_eg_level[1];
+    m[72] = v.pitch_eg_level[2];
+    m
+}
+
 // ── DX7 1-voice bulk dump (155 bytes total) ───────────────────────────────────
 // F0 43 0n 00 01 1B <128 bytes payload> <checksum> F7
 

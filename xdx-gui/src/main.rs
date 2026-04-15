@@ -1,10 +1,11 @@
 use eframe::egui::{self, Color32, Grid, RichText};
 use std::path::PathBuf;
 use xdx_core::dx100::Dx100Voice;
-use xdx_core::sysex::{dx100_decode_1voice, dx100_encode_1voice};
+use xdx_core::sysex::{dx100_decode_1voice, dx100_decode_32voice, dx100_encode_1voice};
 use xdx_midi::{MidiEvent, MidiManager};
 
 static IVORY_EBONY_SYX: &[u8] = include_bytes!("../../testdata/syx/IvoryEbony.syx");
+static ALL_VOICES_SYX:  &[u8] = include_bytes!("../../testdata/syx/all_voices.syx");
 
 // ── lookup tables (from original dx100ParamCtrl.c) ────────────────────────────
 const FREQ_TBL: &[&str] = &[
@@ -101,17 +102,21 @@ struct App {
     sysex_state:     SysExState,       // GET sequence state machine
     sysex_out_flash: f64,  // timestamp of last SysEx send (for indicator flash)
     sysex_in_flash:  f64,  // timestamp of last SysEx receive
-    // voice data
+    // 1-voice edit buffer
     voice:      Dx100Voice,
     name_buf:   String,          // TextEdit buffer for voice name
     file_path:  Option<PathBuf>,
+    // 32-voice bank
+    bank:       Vec<Dx100Voice>,
+    bank_sel:   usize,           // highlighted slot (0-31), no sync to editor yet
     status:     String,
 }
 
 impl App {
     fn new() -> Self {
-        let voice = dx100_decode_1voice(IVORY_EBONY_SYX).expect("decode failed");
+        let voice = dx100_decode_1voice(IVORY_EBONY_SYX).expect("1-voice decode failed");
         let name_buf = voice.name_str();
+        let bank = dx100_decode_32voice(ALL_VOICES_SYX).expect("32-voice decode failed");
         Self {
             synth_type: SynthType::Dx100,
             midi_manager:    MidiManager::new(),
@@ -124,6 +129,8 @@ impl App {
             voice,
             name_buf,
             file_path: None,
+            bank,
+            bank_sel: 0,
             status: "Test data loaded".to_string(),
         }
     }
@@ -481,6 +488,25 @@ impl eframe::App for App {
         }
         self.show_midi_test = show_midi_test;
 
+        // ── 32-voice bank list (left panel) ──────────────────────────────────
+        egui::SidePanel::left("bank_panel")
+            .resizable(true)
+            .default_width(180.0)
+            .show(ctx, |ui| {
+                ui.label(RichText::new("32 VOICES").strong().small());
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for i in 0..self.bank.len() {
+                        let name = self.bank[i].name_str();
+                        let label = format!("{:02}  {}", i + 1, name);
+                        if ui.selectable_label(self.bank_sel == i, label).clicked() {
+                            self.bank_sel = i;
+                        }
+                    }
+                });
+            });
+
+        // ── 1-voice editor (central panel) ───────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::both().show(ui, |ui| {
                 show_dx100_voice(ui, &mut self.voice, &mut self.name_buf);
