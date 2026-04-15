@@ -64,25 +64,20 @@ fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).strong().small().color(egui::Color32::from_gray(160)));
 }
 
-// ── Tab state enums ───────────────────────────────────────────────────────────
+// ── State enums ───────────────────────────────────────────────────────────────
 
 #[derive(PartialEq)]
 enum SynthType { Dx100, Dx7 }
 
-#[derive(PartialEq)]
-enum VoiceMode { OneVoice, ThirtyTwo }
-
-#[derive(PartialEq)]
-enum ActiveTab { File, SysEx }
-
-/// State of the SysEx GET sequence.
+/// State of the SysEx Fetch sequence.
 #[derive(Clone, Copy, PartialEq)]
 enum SysExState {
     Idle,
-    GetPending { sent_at: f64 },  // waiting for SysEx response from device
+    Fetch1Pending  { sent_at: f64 },  // waiting for 1-voice SysEx response
+    Fetch32Pending { sent_at: f64 },  // waiting for 32-voice SysEx response
 }
 
-const GET_TIMEOUT_SECS: f64 = 5.0;
+const FETCH_TIMEOUT_SECS: f64 = 5.0;
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
@@ -97,10 +92,7 @@ fn main() -> eframe::Result<()> {
 }
 
 struct App {
-    // tab state
     synth_type: SynthType,
-    voice_mode: VoiceMode,
-    active_tab: ActiveTab,
     // MIDI
     midi_manager:   MidiManager,
     midi_in_sel:    Option<String>,   // port name selected in Settings menu
@@ -122,8 +114,6 @@ impl App {
         let name_buf = voice.name_str();
         Self {
             synth_type: SynthType::Dx100,
-            voice_mode: VoiceMode::OneVoice,
-            active_tab: ActiveTab::File,
             midi_manager:    MidiManager::new(),
             midi_in_sel:     None,
             midi_out_sel:    None,
@@ -229,25 +219,30 @@ impl eframe::App for App {
                         self.status = format!("SysEx decode error: {e:?}");
                     }
                 }
-                // GET sequence complete — close connections and return to Idle
+                // Fetch complete — close connections and return to Idle
                 self.midi_manager.close_in();
                 self.midi_manager.close_out();
                 self.sysex_state = SysExState::Idle;
             }
         }
-        // ── GET timeout ───────────────────────────────────────────────────────
-        if let SysExState::GetPending { sent_at } = self.sysex_state {
-            if now - sent_at > GET_TIMEOUT_SECS {
+        // ── Fetch timeout ─────────────────────────────────────────────────────
+        let fetch_sent_at = match self.sysex_state {
+            SysExState::Fetch1Pending  { sent_at } => Some(sent_at),
+            SysExState::Fetch32Pending { sent_at } => Some(sent_at),
+            SysExState::Idle => None,
+        };
+        if let Some(sent_at) = fetch_sent_at {
+            if now - sent_at > FETCH_TIMEOUT_SECS {
                 self.midi_manager.close_in();
                 self.midi_manager.close_out();
                 self.sysex_state = SysExState::Idle;
-                self.status = format!("Fetch timeout: no response from device ({GET_TIMEOUT_SECS:.0}s)");
+                self.status = format!("Fetch timeout: no response from device ({FETCH_TIMEOUT_SECS:.0}s)");
             }
         }
-        // Keep repainting while flash active or GET is pending (drives timeout check)
+        // Keep repainting while flash active or a fetch is pending (drives timeout check)
         if (now - self.sysex_in_flash) < FLASH_SECS
             || (now - self.sysex_out_flash) < FLASH_SECS
-            || matches!(self.sysex_state, SysExState::GetPending { .. })
+            || !matches!(self.sysex_state, SysExState::Idle)
         {
             ctx.request_repaint();
         }
@@ -298,106 +293,123 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.synth_type, SynthType::Dx7,   "DX7");
             });
             ui.separator();
-            // Row 2: voice mode
+            // Row 2: file operations
             ui.horizontal(|ui| {
-                ui.label(hdr("MODE:"));
-                ui.selectable_value(&mut self.voice_mode, VoiceMode::OneVoice, "1 VOICE");
-                ui.selectable_value(&mut self.voice_mode, VoiceMode::ThirtyTwo, "32 VOICES");
+                ui.label(hdr("FILE:"));
+                if ui.button("Open").clicked()    { self.open_file(); }
+                if ui.button("Save").clicked()    { self.save_file(); }
+                if ui.button("Save As").clicked() { self.save_as(); }
+                ui.separator();
+                let filename = self.file_path.as_deref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("(test data)");
+                ui.label(filename);
             });
             ui.separator();
-            // Row 3: function tabs only
+            // Row 3: SysEx operations + connection indicators
             ui.horizontal(|ui| {
-                ui.label(hdr("TASK:"));
-                ui.selectable_value(&mut self.active_tab, ActiveTab::File,  "File");
-                ui.selectable_value(&mut self.active_tab, ActiveTab::SysEx, "SysEx");
-            });
-            ui.separator();
-            // Row 4: tab-specific controls
-            ui.horizontal(|ui| {
-                match self.active_tab {
-                    ActiveTab::File => {
-                        if ui.button("Open").clicked()    { self.open_file(); }
-                        if ui.button("Save").clicked()    { self.save_file(); }
-                        if ui.button("Save As").clicked() { self.save_as(); }
-                        ui.separator();
-                        let filename = self.file_path.as_deref()
-                            .and_then(|p| p.file_name())
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("(test data)");
-                        ui.label(filename);
-                    }
-                    ActiveTab::SysEx => {
-                        let is_pending = matches!(self.sysex_state, SysExState::GetPending { .. });
+                ui.label(hdr("SysEx:"));
 
-                        if is_pending {
-                            // Cancel replaces Fetch while waiting for response
-                            if ui.button("Cancel").clicked() {
-                                self.midi_manager.close_in();
-                                self.midi_manager.close_out();
-                                self.sysex_state = SysExState::Idle;
-                                self.status = "Fetch cancelled".to_string();
+                let is_fetch1  = matches!(self.sysex_state, SysExState::Fetch1Pending  { .. });
+                let is_fetch32 = matches!(self.sysex_state, SysExState::Fetch32Pending { .. });
+                let any_fetch  = is_fetch1 || is_fetch32;
+
+                // ── Fetch 1 (or Cancel while pending) ────────────────────────
+                if is_fetch1 {
+                    if ui.button("Cancel").clicked() {
+                        self.midi_manager.close_in();
+                        self.midi_manager.close_out();
+                        self.sysex_state = SysExState::Idle;
+                        self.status = "Fetch 1 cancelled".to_string();
+                    }
+                } else {
+                    if ui.add_enabled(!any_fetch, egui::Button::new("Fetch 1")).clicked() {
+                        let result = self.ensure_out()
+                            .and_then(|_| self.ensure_in())
+                            .and_then(|_| self.midi_manager
+                                .send(&[0xF0, 0x43, 0x20, 0x03, 0xF7])
+                                .map_err(|e| e.to_string()));
+                        match result {
+                            Ok(()) => {
+                                self.sysex_out_flash = now;
+                                self.sysex_state = SysExState::Fetch1Pending { sent_at: now };
+                                self.status = "Fetch 1: request sent, waiting for response...".to_string();
                             }
-                            // Send disabled while Fetch is in flight
-                            ui.add_enabled(false, egui::Button::new("Send"));
-                        } else {
-                            // Fetch: request+receive — auto-connect IN+OUT, send Parameter Request
-                            if ui.button("Fetch").clicked() {
-                                let result = self.ensure_out()
-                                    .and_then(|_| self.ensure_in())
-                                    .and_then(|_| self.midi_manager
-                                        .send(&[0xF0, 0x43, 0x20, 0x03, 0xF7])
-                                        .map_err(|e| e.to_string()));
-                                match result {
-                                    Ok(()) => {
-                                        self.sysex_out_flash = now;
-                                        self.sysex_state = SysExState::GetPending { sent_at: now };
-                                        self.status = "Fetch: request sent, waiting for response...".to_string();
-                                    }
-                                    Err(e) => self.status = format!("Fetch failed: {e}"),
-                                }
-                            }
-                            // Send: auto-connect OUT, send bulk dump, then close
-                            if ui.button("Send").clicked() {
-                                let bytes = dx100_encode_1voice(&self.voice, 0);
-                                let result = self.ensure_out()
-                                    .and_then(|_| self.midi_manager.send(&bytes)
-                                        .map_err(|e| e.to_string()));
-                                match result {
-                                    Ok(()) => {
-                                        self.sysex_out_flash = now;
-                                        self.status = format!("Send: \"{}\" sent to synth", self.voice.name_str());
-                                    }
-                                    Err(e) => self.status = format!("Send failed: {e}"),
-                                }
-                                // Send sequence complete — close connections
-                                self.midi_manager.close_in();
-                                self.midi_manager.close_out();
-                            }
+                            Err(e) => self.status = format!("Fetch 1 failed: {e}"),
                         }
-                        ui.separator();
-                        // Connection indicators: green=connected, yellow=flash, gray=idle
-                        let in_flash  = (now - self.sysex_in_flash)  < FLASH_SECS;
-                        let out_flash = (now - self.sysex_out_flash) < FLASH_SECS;
-                        let dot = |connected: bool, flash: bool| -> RichText {
-                            let color = if flash      { Color32::YELLOW }
-                                        else if connected { Color32::GREEN }
-                                        else              { Color32::from_gray(110) };
-                            RichText::new("●").color(color)
-                        };
-                        let in_name = self.midi_manager.in_port_name.as_deref()
-                            .or(self.midi_in_sel.as_deref())
-                            .unwrap_or("(none)");
-                        let out_name = self.midi_manager.out_port_name.as_deref()
-                            .or(self.midi_out_sel.as_deref())
-                            .unwrap_or("(none)");
-                        let in_ok  = self.midi_manager.in_connected();
-                        let out_ok = self.midi_manager.out_connected();
-                        ui.label(dot(in_ok,  in_flash));
-                        ui.label(format!("IN: {in_name}"));
-                        ui.label(dot(out_ok, out_flash));
-                        ui.label(format!("OUT: {out_name}"));
                     }
                 }
+
+                // ── Send 1 ───────────────────────────────────────────────────
+                if ui.add_enabled(!any_fetch, egui::Button::new("Send 1")).clicked() {
+                    let bytes = dx100_encode_1voice(&self.voice, 0);
+                    let result = self.ensure_out()
+                        .and_then(|_| self.midi_manager.send(&bytes)
+                            .map_err(|e| e.to_string()));
+                    match result {
+                        Ok(()) => {
+                            self.sysex_out_flash = now;
+                            self.status = format!("Send 1: \"{}\" sent to synth", self.voice.name_str());
+                        }
+                        Err(e) => self.status = format!("Send 1 failed: {e}"),
+                    }
+                    self.midi_manager.close_in();
+                    self.midi_manager.close_out();
+                }
+
+                ui.separator();
+
+                // ── Fetch 32 (or Cancel while pending) ───────────────────────
+                if is_fetch32 {
+                    if ui.button("Cancel").clicked() {
+                        self.midi_manager.close_in();
+                        self.midi_manager.close_out();
+                        self.sysex_state = SysExState::Idle;
+                        self.status = "Fetch 32 cancelled".to_string();
+                    }
+                } else {
+                    if ui.add_enabled(!any_fetch, egui::Button::new("Fetch 32")).clicked() {
+                        let result = self.ensure_out()
+                            .and_then(|_| self.ensure_in())
+                            .and_then(|_| self.midi_manager
+                                .send(&[0xF0, 0x43, 0x20, 0x04, 0xF7])
+                                .map_err(|e| e.to_string()));
+                        match result {
+                            Ok(()) => {
+                                self.sysex_out_flash = now;
+                                self.sysex_state = SysExState::Fetch32Pending { sent_at: now };
+                                self.status = "Fetch 32: request sent, waiting for response...".to_string();
+                            }
+                            Err(e) => self.status = format!("Fetch 32 failed: {e}"),
+                        }
+                    }
+                }
+
+                // ── Send 32 (stub) ────────────────────────────────────────────
+                if ui.add_enabled(!any_fetch, egui::Button::new("Send 32")).clicked() {
+                    self.status = "Send 32: not yet implemented".to_string();
+                }
+
+                ui.separator();
+
+                // ── Connection indicators ─────────────────────────────────────
+                let in_flash  = (now - self.sysex_in_flash)  < FLASH_SECS;
+                let out_flash = (now - self.sysex_out_flash) < FLASH_SECS;
+                let dot = |connected: bool, flash: bool| -> RichText {
+                    let color = if flash           { Color32::YELLOW }
+                                else if connected  { Color32::GREEN }
+                                else               { Color32::from_gray(110) };
+                    RichText::new("●").color(color)
+                };
+                let in_name  = self.midi_manager.in_port_name.as_deref()
+                    .or(self.midi_in_sel.as_deref()).unwrap_or("(none)");
+                let out_name = self.midi_manager.out_port_name.as_deref()
+                    .or(self.midi_out_sel.as_deref()).unwrap_or("(none)");
+                ui.label(dot(self.midi_manager.in_connected(),  in_flash));
+                ui.label(format!("IN: {in_name}"));
+                ui.label(dot(self.midi_manager.out_connected(), out_flash));
+                ui.label(format!("OUT: {out_name}"));
             });
         });
 
