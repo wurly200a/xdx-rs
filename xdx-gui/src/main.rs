@@ -307,6 +307,7 @@ impl eframe::App for App {
             ui.separator();
             // Row 3: function tabs only
             ui.horizontal(|ui| {
+                ui.label(hdr("TASK:"));
                 ui.selectable_value(&mut self.active_tab, ActiveTab::File,  "File");
                 ui.selectable_value(&mut self.active_tab, ActiveTab::SysEx, "SysEx");
             });
