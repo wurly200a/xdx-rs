@@ -75,6 +75,15 @@ enum VoiceMode { OneVoice, ThirtyTwo }
 #[derive(PartialEq)]
 enum ActiveTab { File, SysEx }
 
+/// State of the SysEx GET sequence.
+#[derive(Clone, Copy, PartialEq)]
+enum SysExState {
+    Idle,
+    GetPending { sent_at: f64 },  // waiting for SysEx response from device
+}
+
+const GET_TIMEOUT_SECS: f64 = 5.0;
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 fn main() -> eframe::Result<()> {
@@ -97,6 +106,7 @@ struct App {
     midi_in_sel:    Option<String>,   // port name selected in Settings menu
     midi_out_sel:   Option<String>,
     show_midi_test: bool,
+    sysex_state:     SysExState,       // GET sequence state machine
     sysex_out_flash: f64,  // timestamp of last SysEx send (for indicator flash)
     sysex_in_flash:  f64,  // timestamp of last SysEx receive
     // voice data
@@ -118,6 +128,7 @@ impl App {
             midi_in_sel:     None,
             midi_out_sel:    None,
             show_midi_test:  false,
+            sysex_state:     SysExState::Idle,
             sysex_out_flash: f64::NEG_INFINITY,
             sysex_in_flash:  f64::NEG_INFINITY,
             voice,
@@ -218,13 +229,26 @@ impl eframe::App for App {
                         self.status = format!("SysEx decode error: {e:?}");
                     }
                 }
-                // GET sequence complete — close connections
+                // GET sequence complete — close connections and return to Idle
                 self.midi_manager.close_in();
                 self.midi_manager.close_out();
+                self.sysex_state = SysExState::Idle;
             }
         }
-        // Keep repainting while any flash is active
-        if (now - self.sysex_in_flash) < FLASH_SECS || (now - self.sysex_out_flash) < FLASH_SECS {
+        // ── GET timeout ───────────────────────────────────────────────────────
+        if let SysExState::GetPending { sent_at } = self.sysex_state {
+            if now - sent_at > GET_TIMEOUT_SECS {
+                self.midi_manager.close_in();
+                self.midi_manager.close_out();
+                self.sysex_state = SysExState::Idle;
+                self.status = format!("GET timeout: no response from device ({GET_TIMEOUT_SECS:.0}s)");
+            }
+        }
+        // Keep repainting while flash active or GET is pending (drives timeout check)
+        if (now - self.sysex_in_flash) < FLASH_SECS
+            || (now - self.sysex_out_flash) < FLASH_SECS
+            || matches!(self.sysex_state, SysExState::GetPending { .. })
+        {
             ctx.request_repaint();
         }
 
@@ -302,37 +326,52 @@ impl eframe::App for App {
                         ui.label(filename);
                     }
                     ActiveTab::SysEx => {
-                        // GET: auto-connect IN+OUT, send Parameter Request
-                        if ui.button("GET").clicked() {
-                            let result = self.ensure_out()
-                                .and_then(|_| self.ensure_in())
-                                .and_then(|_| self.midi_manager
-                                    .send(&[0xF0, 0x43, 0x20, 0x03, 0xF7])
-                                    .map_err(|e| e.to_string()));
-                            match result {
-                                Ok(()) => {
-                                    self.sysex_out_flash = now;
-                                    self.status = "GET: request sent, waiting for response...".to_string();
-                                }
-                                Err(e) => self.status = format!("GET failed: {e}"),
+                        let is_pending = matches!(self.sysex_state, SysExState::GetPending { .. });
+
+                        if is_pending {
+                            // Cancel replaces GET while waiting for response
+                            if ui.button("Cancel").clicked() {
+                                self.midi_manager.close_in();
+                                self.midi_manager.close_out();
+                                self.sysex_state = SysExState::Idle;
+                                self.status = "GET cancelled".to_string();
                             }
-                        }
-                        // SET: auto-connect OUT, send bulk dump, then close
-                        if ui.button("SET").clicked() {
-                            let bytes = dx100_encode_1voice(&self.voice, 0);
-                            let result = self.ensure_out()
-                                .and_then(|_| self.midi_manager.send(&bytes)
-                                    .map_err(|e| e.to_string()));
-                            match result {
-                                Ok(()) => {
-                                    self.sysex_out_flash = now;
-                                    self.status = format!("SET: sent \"{}\" to synth", self.voice.name_str());
+                            // SET disabled while GET is in flight
+                            ui.add_enabled(false, egui::Button::new("SET"));
+                        } else {
+                            // GET: auto-connect IN+OUT, send Parameter Request
+                            if ui.button("GET").clicked() {
+                                let result = self.ensure_out()
+                                    .and_then(|_| self.ensure_in())
+                                    .and_then(|_| self.midi_manager
+                                        .send(&[0xF0, 0x43, 0x20, 0x03, 0xF7])
+                                        .map_err(|e| e.to_string()));
+                                match result {
+                                    Ok(()) => {
+                                        self.sysex_out_flash = now;
+                                        self.sysex_state = SysExState::GetPending { sent_at: now };
+                                        self.status = "GET: request sent, waiting for response...".to_string();
+                                    }
+                                    Err(e) => self.status = format!("GET failed: {e}"),
                                 }
-                                Err(e) => self.status = format!("SET failed: {e}"),
                             }
-                            // SET sequence complete — close connections
-                            self.midi_manager.close_in();
-                            self.midi_manager.close_out();
+                            // SET: auto-connect OUT, send bulk dump, then close
+                            if ui.button("SET").clicked() {
+                                let bytes = dx100_encode_1voice(&self.voice, 0);
+                                let result = self.ensure_out()
+                                    .and_then(|_| self.midi_manager.send(&bytes)
+                                        .map_err(|e| e.to_string()));
+                                match result {
+                                    Ok(()) => {
+                                        self.sysex_out_flash = now;
+                                        self.status = format!("SET: sent \"{}\" to synth", self.voice.name_str());
+                                    }
+                                    Err(e) => self.status = format!("SET failed: {e}"),
+                                }
+                                // SET sequence complete — close connections
+                                self.midi_manager.close_in();
+                                self.midi_manager.close_out();
+                            }
                         }
                         ui.separator();
                         // Connection indicators: green=connected, yellow=flash, gray=idle
