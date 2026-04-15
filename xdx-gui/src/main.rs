@@ -223,7 +223,7 @@ impl eframe::App for App {
                         let name = voice.name_str();
                         self.name_buf = name.clone();
                         self.voice = voice;
-                        self.status = format!("GET: received \"{name}\" from synth");
+                        self.status = format!("Fetch: received \"{name}\" from synth");
                     }
                     Err(e) => {
                         self.status = format!("SysEx decode error: {e:?}");
@@ -241,7 +241,7 @@ impl eframe::App for App {
                 self.midi_manager.close_in();
                 self.midi_manager.close_out();
                 self.sysex_state = SysExState::Idle;
-                self.status = format!("GET timeout: no response from device ({GET_TIMEOUT_SECS:.0}s)");
+                self.status = format!("Fetch timeout: no response from device ({GET_TIMEOUT_SECS:.0}s)");
             }
         }
         // Keep repainting while flash active or GET is pending (drives timeout check)
@@ -329,18 +329,18 @@ impl eframe::App for App {
                         let is_pending = matches!(self.sysex_state, SysExState::GetPending { .. });
 
                         if is_pending {
-                            // Cancel replaces GET while waiting for response
+                            // Cancel replaces Fetch while waiting for response
                             if ui.button("Cancel").clicked() {
                                 self.midi_manager.close_in();
                                 self.midi_manager.close_out();
                                 self.sysex_state = SysExState::Idle;
-                                self.status = "GET cancelled".to_string();
+                                self.status = "Fetch cancelled".to_string();
                             }
-                            // SET disabled while GET is in flight
-                            ui.add_enabled(false, egui::Button::new("SET"));
+                            // Send disabled while Fetch is in flight
+                            ui.add_enabled(false, egui::Button::new("Send"));
                         } else {
-                            // GET: auto-connect IN+OUT, send Parameter Request
-                            if ui.button("GET").clicked() {
+                            // Fetch: request+receive — auto-connect IN+OUT, send Parameter Request
+                            if ui.button("Fetch").clicked() {
                                 let result = self.ensure_out()
                                     .and_then(|_| self.ensure_in())
                                     .and_then(|_| self.midi_manager
@@ -350,13 +350,13 @@ impl eframe::App for App {
                                     Ok(()) => {
                                         self.sysex_out_flash = now;
                                         self.sysex_state = SysExState::GetPending { sent_at: now };
-                                        self.status = "GET: request sent, waiting for response...".to_string();
+                                        self.status = "Fetch: request sent, waiting for response...".to_string();
                                     }
-                                    Err(e) => self.status = format!("GET failed: {e}"),
+                                    Err(e) => self.status = format!("Fetch failed: {e}"),
                                 }
                             }
-                            // SET: auto-connect OUT, send bulk dump, then close
-                            if ui.button("SET").clicked() {
+                            // Send: auto-connect OUT, send bulk dump, then close
+                            if ui.button("Send").clicked() {
                                 let bytes = dx100_encode_1voice(&self.voice, 0);
                                 let result = self.ensure_out()
                                     .and_then(|_| self.midi_manager.send(&bytes)
@@ -364,11 +364,11 @@ impl eframe::App for App {
                                 match result {
                                     Ok(()) => {
                                         self.sysex_out_flash = now;
-                                        self.status = format!("SET: sent \"{}\" to synth", self.voice.name_str());
+                                        self.status = format!("Send: \"{}\" sent to synth", self.voice.name_str());
                                     }
-                                    Err(e) => self.status = format!("SET failed: {e}"),
+                                    Err(e) => self.status = format!("Send failed: {e}"),
                                 }
-                                // SET sequence complete — close connections
+                                // Send sequence complete — close connections
                                 self.midi_manager.close_in();
                                 self.midi_manager.close_out();
                             }
