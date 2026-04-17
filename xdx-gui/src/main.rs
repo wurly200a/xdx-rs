@@ -1,7 +1,7 @@
 use eframe::egui::{self, Color32, Grid, RichText};
 use std::path::PathBuf;
 use xdx_core::dx100::Dx100Voice;
-use xdx_core::sysex::{dx100_decode_1voice, dx100_decode_32voice, dx100_encode_1voice};
+use xdx_core::sysex::{dx100_decode_1voice, dx100_decode_32voice, dx100_encode_1voice, dx100_encode_32voice};
 use xdx_midi::{MidiEvent, MidiManager};
 
 static IVORY_EBONY_SYX: &[u8] = include_bytes!("../../testdata/syx/IvoryEbony.syx");
@@ -215,15 +215,29 @@ impl eframe::App for App {
         while let Some(event) = self.midi_manager.try_recv() {
             if let MidiEvent::SysEx(bytes) = event {
                 self.sysex_in_flash = now;
-                match dx100_decode_1voice(&bytes) {
-                    Ok(voice) => {
-                        let name = voice.name_str();
-                        self.name_buf = name.clone();
-                        self.voice = voice;
-                        self.status = format!("Fetch: received \"{name}\" from synth");
+                // Route by format byte: 0x03 = 1-voice, 0x04 = 32-voice
+                if bytes.len() >= 4 && bytes[3] == 0x04 {
+                    match dx100_decode_32voice(&bytes) {
+                        Ok(voices) => {
+                            self.bank = voices;
+                            self.bank_sel = 0;
+                            self.status = "Fetch 32: received 32-voice bank from synth".to_string();
+                        }
+                        Err(e) => {
+                            self.status = format!("Fetch 32 decode error: {e:?}");
+                        }
                     }
-                    Err(e) => {
-                        self.status = format!("SysEx decode error: {e:?}");
+                } else {
+                    match dx100_decode_1voice(&bytes) {
+                        Ok(voice) => {
+                            let name = voice.name_str();
+                            self.name_buf = name.clone();
+                            self.voice = voice;
+                            self.status = format!("Fetch 1: received \"{name}\" from synth");
+                        }
+                        Err(e) => {
+                            self.status = format!("Fetch 1 decode error: {e:?}");
+                        }
                     }
                 }
                 // Fetch complete — close connections and return to Idle
@@ -322,6 +336,50 @@ impl eframe::App for App {
                 let is_fetch32 = matches!(self.sysex_state, SysExState::Fetch32Pending { .. });
                 let any_fetch  = is_fetch1 || is_fetch32;
 
+                // ── Fetch 32 (or Cancel while pending) ───────────────────────
+                if is_fetch32 {
+                    if ui.button("Cancel").clicked() {
+                        self.midi_manager.close_in();
+                        self.midi_manager.close_out();
+                        self.sysex_state = SysExState::Idle;
+                        self.status = "Fetch 32 cancelled".to_string();
+                    }
+                } else {
+                    if ui.add_enabled(!any_fetch, egui::Button::new("Fetch 32")).clicked() {
+                        let result = self.ensure_out()
+                            .and_then(|_| self.ensure_in())
+                            .and_then(|_| self.midi_manager
+                                .send(&[0xF0, 0x43, 0x20, 0x04, 0xF7])
+                                .map_err(|e| e.to_string()));
+                        match result {
+                            Ok(()) => {
+                                self.sysex_out_flash = now;
+                                self.sysex_state = SysExState::Fetch32Pending { sent_at: now };
+                                self.status = "Fetch 32: request sent, waiting for response...".to_string();
+                            }
+                            Err(e) => self.status = format!("Fetch 32 failed: {e}"),
+                        }
+                    }
+                }
+
+                // ── Send 32 ───────────────────────────────────────────────────
+                if ui.add_enabled(!any_fetch, egui::Button::new("Send 32")).clicked() {
+                    let bytes = dx100_encode_32voice(&self.bank, 0);
+                    let result = self.ensure_out()
+                        .and_then(|_| self.midi_manager.send(&bytes)
+                            .map_err(|e| e.to_string()));
+                    match result {
+                        Ok(()) => {
+                            self.sysex_out_flash = now;
+                            self.status = "Send 32: bank sent to synth".to_string();
+                        }
+                        Err(e) => self.status = format!("Send 32 failed: {e}"),
+                    }
+                    self.midi_manager.close_out();
+                }
+
+                ui.separator();
+
                 // ── Fetch 1 (or Cancel while pending) ────────────────────────
                 if is_fetch1 {
                     if ui.button("Cancel").clicked() {
@@ -363,39 +421,6 @@ impl eframe::App for App {
                     }
                     self.midi_manager.close_in();
                     self.midi_manager.close_out();
-                }
-
-                ui.separator();
-
-                // ── Fetch 32 (or Cancel while pending) ───────────────────────
-                if is_fetch32 {
-                    if ui.button("Cancel").clicked() {
-                        self.midi_manager.close_in();
-                        self.midi_manager.close_out();
-                        self.sysex_state = SysExState::Idle;
-                        self.status = "Fetch 32 cancelled".to_string();
-                    }
-                } else {
-                    if ui.add_enabled(!any_fetch, egui::Button::new("Fetch 32")).clicked() {
-                        let result = self.ensure_out()
-                            .and_then(|_| self.ensure_in())
-                            .and_then(|_| self.midi_manager
-                                .send(&[0xF0, 0x43, 0x20, 0x04, 0xF7])
-                                .map_err(|e| e.to_string()));
-                        match result {
-                            Ok(()) => {
-                                self.sysex_out_flash = now;
-                                self.sysex_state = SysExState::Fetch32Pending { sent_at: now };
-                                self.status = "Fetch 32: request sent, waiting for response...".to_string();
-                            }
-                            Err(e) => self.status = format!("Fetch 32 failed: {e}"),
-                        }
-                    }
-                }
-
-                // ── Send 32 (stub) ────────────────────────────────────────────
-                if ui.add_enabled(!any_fetch, egui::Button::new("Send 32")).clicked() {
-                    self.status = "Send 32: not yet implemented".to_string();
                 }
 
                 ui.separator();
