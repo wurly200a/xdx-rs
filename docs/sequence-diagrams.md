@@ -31,7 +31,7 @@ sequenceDiagram
     GUI->>FS: FileDialog::pick_file()
     FS-->>GUI: path (.syx)
     GUI->>FS: fs::read(path)
-    FS-->>GUI: Vec&lt;u8&gt;
+    FS-->>GUI: Vec[u8]
     GUI->>Core: dx100_decode_1voice(&bytes)
     Core-->>GUI: Dx100Voice
     GUI->>GUI: self.voice = voice<br/>self.name_buf = name<br/>self.file_path = path
@@ -54,7 +54,7 @@ sequenceDiagram
         FS-->>GUI: path
     end
     GUI->>Core: dx100_encode_1voice(&self.voice, 0)
-    Core-->>GUI: Vec&lt;u8&gt; (101 bytes)
+    Core-->>GUI: Vec[u8] (101 bytes)
     GUI->>FS: fs::write(path, &bytes)
     GUI->>GUI: self.file_path = path
 ```
@@ -108,7 +108,7 @@ sequenceDiagram
     User->>GUI: click "Send"
     GUI->>Midi: open_out(port)
     GUI->>Core: dx100_encode_1voice(&self.voice, 0)
-    Core-->>GUI: Vec&lt;u8&gt; (101 bytes)
+    Core-->>GUI: Vec[u8] (101 bytes)
     GUI->>Midi: send_then_close(&bytes)
     Note over Midi: channel.send(Some(bytes))<br/>channel.send(None)
     Midi->>Worker: Some(bytes) → forward to MIDI OUT
@@ -132,9 +132,9 @@ sequenceDiagram
     GUI->>FS: FileDialog::pick_file()
     FS-->>GUI: path (.syx)
     GUI->>FS: fs::read(path)
-    FS-->>GUI: Vec&lt;u8&gt; (4104 bytes)
+    FS-->>GUI: Vec[u8] (4104 bytes)
     GUI->>Core: dx100_decode_32voice(&bytes)
-    Core-->>GUI: Vec&lt;Dx100Voice&gt; (32 voices)
+    Core-->>GUI: Vec[Dx100Voice] (32 voices)
     GUI->>GUI: self.bank = voices<br/>self.bank_sel = 0<br/>self.bank_file_path = path
 ```
 
@@ -155,7 +155,7 @@ sequenceDiagram
         FS-->>GUI: path
     end
     GUI->>Core: dx100_encode_32voice(&self.bank, 0)
-    Core-->>GUI: Vec&lt;u8&gt; (4104 bytes)
+    Core-->>GUI: Vec[u8] (4104 bytes)
     GUI->>FS: fs::write(path, &bytes)
     GUI->>GUI: self.bank_file_path = path
 ```
@@ -191,7 +191,7 @@ sequenceDiagram
         GUI->>Midi: try_recv()
         Midi-->>GUI: MidiEvent::SysEx(bytes) [4104 bytes]
         GUI->>Core: dx100_decode_32voice(&bytes)
-        Core-->>GUI: Vec&lt;Dx100Voice&gt; (32 voices)
+        Core-->>GUI: Vec[Dx100Voice] (32 voices)
         GUI->>GUI: self.bank = voices<br/>state = Idle
         GUI->>Midi: close_in() / close_out()
     end
@@ -214,7 +214,7 @@ sequenceDiagram
     GUI->>Midi: open_out(port)
     GUI->>Core: dx100_encode_32voice(&self.bank, 0)
     Note over Core: device=0: F0 43 00 04 20 00<br/>(DX100 accepts bulk dump on device 0)
-    Core-->>GUI: Vec&lt;u8&gt; (4104 bytes)
+    Core-->>GUI: Vec[u8] (4104 bytes)
     GUI->>Midi: send_then_close(&bytes)
     Note over Midi: channel.send(Some(bytes))<br/>channel.send(None)
     Midi->>Worker: Some(bytes)
