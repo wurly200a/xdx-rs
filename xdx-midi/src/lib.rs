@@ -64,13 +64,26 @@ mod real {
                 .clone();
 
             let (tx, rx) = mpsc::channel();
+            let mut sysex_buf: Vec<u8> = Vec::new();
             let conn = mi.connect(&port, "xdx-in", move |_ts, msg, _| {
-                let ev = if msg.first() == Some(&0xF0) {
-                    MidiEvent::SysEx(msg.to_vec())
+                if msg.is_empty() { return; }
+                if msg[0] == 0xF0 {
+                    // Start of a new SysEx (may be complete or first chunk)
+                    sysex_buf.clear();
+                    sysex_buf.extend_from_slice(msg);
+                } else if !sysex_buf.is_empty() {
+                    // Continuation chunk of a multi-packet SysEx
+                    sysex_buf.extend_from_slice(msg);
                 } else {
-                    MidiEvent::Other(msg.to_vec())
-                };
-                let _ = tx.send(ev);
+                    // Regular (non-SysEx) MIDI message
+                    let _ = tx.send(MidiEvent::Other(msg.to_vec()));
+                    return;
+                }
+                // Deliver only when the complete SysEx (ending F7) has arrived
+                if sysex_buf.last() == Some(&0xF7) {
+                    let _ = tx.send(MidiEvent::SysEx(sysex_buf.clone()));
+                    sysex_buf.clear();
+                }
             }, ()).map_err(|e| MidiError(e.to_string()))?;
 
             self.in_conn = Some(conn);
