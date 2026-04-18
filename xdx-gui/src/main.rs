@@ -572,7 +572,6 @@ impl eframe::App for App {
                             }
                             Err(e) => self.status = format!("Send 32 failed: {e}"),
                         }
-                        self.midi_manager.close_out();
                     }
                 });
 
@@ -685,8 +684,6 @@ impl eframe::App for App {
                         }
                         Err(e) => self.status = format!("Send 1 failed: {e}"),
                     }
-                    self.midi_manager.close_in();
-                    self.midi_manager.close_out();
                 }
             });
 
