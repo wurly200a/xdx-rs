@@ -19,13 +19,15 @@ pub enum MidiEvent {
 #[cfg(not(feature = "virtual-midi"))]
 mod real {
     use super::{MidiError, MidiEvent};
-    use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
-    use std::sync::mpsc::{self, Receiver};
+    use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput};
+    use std::sync::mpsc::{self, Receiver, Sender};
 
     pub struct MidiManager {
-        in_conn:  Option<MidiInputConnection<()>>,
-        out_conn: Option<MidiOutputConnection>,
-        rx:       Option<Receiver<MidiEvent>>,
+        in_conn:    Option<MidiInputConnection<()>>,
+        // OUT is owned by a worker thread; we communicate via a channel.
+        // Dropping out_tx causes the worker to exit and close the port.
+        out_tx:     Option<Sender<Vec<u8>>>,
+        rx:         Option<Receiver<MidiEvent>>,
         pub in_port_name:  Option<String>,
         pub out_port_name: Option<String>,
     }
@@ -34,7 +36,7 @@ mod real {
         pub fn new() -> Self {
             Self {
                 in_conn:       None,
-                out_conn:      None,
+                out_tx:        None,
                 rx:            None,
                 in_port_name:  None,
                 out_port_name: None,
@@ -112,20 +114,32 @@ mod real {
             let conn = mo.connect(&port, "xdx-out")
                 .map_err(|e| MidiError(e.to_string()))?;
 
-            self.out_conn = Some(conn);
+            // Worker thread owns the connection.  The GUI thread sends byte
+            // buffers through `tx`; the worker forwards them to MIDI OUT.
+            // Dropping `tx` (via close_out) causes recv() to return Err,
+            // which cleanly exits the worker and closes the port.
+            let (tx, rx) = mpsc::channel::<Vec<u8>>();
+            std::thread::spawn(move || {
+                while let Ok(data) = rx.recv() {
+                    conn.send(&data).ok();
+                }
+                conn.close();
+            });
+
+            self.out_tx = Some(tx);
             self.out_port_name = Some(port_name.to_string());
             Ok(())
         }
 
         pub fn close_out(&mut self) {
-            if let Some(c) = self.out_conn.take() { c.close(); }
+            self.out_tx = None;  // drops Sender → worker thread exits
             self.out_port_name = None;
         }
 
         pub fn send(&mut self, data: &[u8]) -> Result<(), MidiError> {
-            self.out_conn.as_mut()
+            self.out_tx.as_ref()
                 .ok_or_else(|| MidiError("MIDI OUT not connected".to_string()))?
-                .send(data)
+                .send(data.to_vec())
                 .map_err(|e| MidiError(e.to_string()))
         }
 
@@ -134,7 +148,7 @@ mod real {
         }
 
         pub fn in_connected(&self)  -> bool { self.in_conn.is_some() }
-        pub fn out_connected(&self) -> bool { self.out_conn.is_some() }
+        pub fn out_connected(&self) -> bool { self.out_tx.is_some() }
     }
 }
 
