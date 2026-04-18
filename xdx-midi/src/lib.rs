@@ -111,7 +111,7 @@ mod real {
                 .ok_or_else(|| MidiError(format!("OUT port not found: {port_name}")))?
                 .clone();
 
-            let conn = mo.connect(&port, "xdx-out")
+            let mut conn = mo.connect(&port, "xdx-out")
                 .map_err(|e| MidiError(e.to_string()))?;
 
             // Worker thread owns the connection.  The GUI thread sends byte
