@@ -100,6 +100,11 @@ struct App {
     sysex_state:     SysExState,
     sysex_out_flash: f64,
     sysex_in_flash:  f64,
+    // MIDI port list cache (populated by background scan thread)
+    in_ports:   Vec<String>,
+    out_ports:  Vec<String>,
+    scanning:   bool,
+    scan_rx:    Option<std::sync::mpsc::Receiver<(Vec<String>, Vec<String>)>>,
     // 1-voice edit buffer
     voice:      Dx100Voice,
     name_buf:   String,
@@ -116,7 +121,7 @@ impl App {
         let voice = dx100_decode_1voice(IVORY_EBONY_SYX).expect("1-voice decode failed");
         let name_buf = voice.name_str();
         let bank = dx100_decode_32voice(ALL_VOICES_SYX).expect("32-voice decode failed");
-        Self {
+        let mut app = Self {
             synth_type: SynthType::Dx100,
             midi_manager:    MidiManager::new(),
             midi_in_sel:     None,
@@ -125,6 +130,10 @@ impl App {
             sysex_state:     SysExState::Idle,
             sysex_out_flash: f64::NEG_INFINITY,
             sysex_in_flash:  f64::NEG_INFINITY,
+            in_ports:   Vec::new(),
+            out_ports:  Vec::new(),
+            scanning:   false,
+            scan_rx:    None,
             voice,
             name_buf,
             file_path:       None,
@@ -132,7 +141,23 @@ impl App {
             bank_sel:        0,
             bank_file_path:  None,
             status: "Test data loaded".to_string(),
-        }
+        };
+        app.start_port_scan(); // scan in background at startup
+        app
+    }
+
+    /// Spawn a background thread to enumerate MIDI ports.
+    /// The GUI thread never blocks waiting for WinMM.
+    fn start_port_scan(&mut self) {
+        if self.scanning { return; }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let inp  = MidiManager::list_in_ports();
+            let outp = MidiManager::list_out_ports();
+            let _ = tx.send((inp, outp));
+        });
+        self.scan_rx = Some(rx);
+        self.scanning = true;
     }
 
     // ── 1-voice file I/O ──────────────────────────────────────────────────────
@@ -324,18 +349,31 @@ impl eframe::App for App {
         if (now - self.sysex_in_flash) < FLASH_SECS
             || (now - self.sysex_out_flash) < FLASH_SECS
             || !matches!(self.sysex_state, SysExState::Idle)
+            || self.scanning
         {
             ctx.request_repaint();
+        }
+
+        // ── Collect background port-scan results ──────────────────────────────
+        if let Some(rx) = &self.scan_rx {
+            if let Ok((inp, outp)) = rx.try_recv() {
+                self.in_ports  = inp;
+                self.out_ports = outp;
+                self.scan_rx   = None;
+                self.scanning  = false;
+            }
         }
 
         // ── Menu bar ─────────────────────────────────────────────────────────
         egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("Settings", |ui| {
+                    // Port lists come from the cache — never blocks the GUI thread.
                     ui.menu_button("MIDI IN", |ui| {
-                        let ports = MidiManager::list_in_ports();
-                        if ports.is_empty() { ui.weak("(no devices found)"); }
-                        for name in ports {
+                        if self.in_ports.is_empty() {
+                            ui.weak(if self.scanning { "(scanning...)" } else { "(no devices found)" });
+                        }
+                        for name in self.in_ports.clone() {
                             let sel = self.midi_in_sel.as_deref() == Some(name.as_str());
                             if ui.selectable_label(sel, &name).clicked() {
                                 self.midi_in_sel = if sel { None } else { Some(name) };
@@ -344,9 +382,10 @@ impl eframe::App for App {
                         }
                     });
                     ui.menu_button("MIDI OUT", |ui| {
-                        let ports = MidiManager::list_out_ports();
-                        if ports.is_empty() { ui.weak("(no devices found)"); }
-                        for name in ports {
+                        if self.out_ports.is_empty() {
+                            ui.weak(if self.scanning { "(scanning...)" } else { "(no devices found)" });
+                        }
+                        for name in self.out_ports.clone() {
                             let sel = self.midi_out_sel.as_deref() == Some(name.as_str());
                             if ui.selectable_label(sel, &name).clicked() {
                                 self.midi_out_sel = if sel { None } else { Some(name) };
@@ -354,6 +393,12 @@ impl eframe::App for App {
                             }
                         }
                     });
+                    ui.separator();
+                    let scan_label = if self.scanning { "Scanning..." } else { "Scan Ports" };
+                    if ui.add_enabled(!self.scanning, egui::Button::new(scan_label)).clicked() {
+                        self.start_port_scan();
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("MIDI Device Test").clicked() {
                         self.show_midi_test = true;
