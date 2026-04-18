@@ -3,5 +3,9 @@ members = [
     "xdx-core",
     "xdx-midi",
     "xdx-gui",
+    "xdx-e2e",
 ]
 resolver = "2"
+
+[patch.crates-io]
+midir = { path = "vendor/midir" }

@@ -69,7 +69,17 @@ mod real {
             let (tx, rx) = mpsc::channel();
             let mut sysex_buf: Vec<u8> = Vec::new();
             let conn = mi.connect(&port, "xdx-in", move |_ts, msg, _| {
-                if msg.is_empty() { return; }
+                if msg.is_empty() {
+                    return;
+                }
+                // Real-Time messages (0xF8-0xFF: clock, active sensing, reset…)
+                // are single-byte and may arrive at any time, including during a
+                // multi-packet SysEx.  Deliver them as Other without interrupting
+                // the SysEx accumulator.
+                if msg[0] >= 0xF8 {
+                    let _ = tx.send(MidiEvent::Other(msg.to_vec()));
+                    return;
+                }
                 if msg[0] == 0xF0 {
                     // Start of a new SysEx (may be complete or first chunk)
                     sysex_buf.clear();
@@ -96,9 +106,20 @@ mod real {
         }
 
         pub fn close_in(&mut self) {
-            if let Some(c) = self.in_conn.take() { c.close(); }
             self.rx = None;
             self.in_port_name = None;
+            if let Some(c) = self.in_conn.take() {
+                // Close on a background thread: on Windows/WinMM the USB MIDI
+                // class driver may block midiInReset() while cancelling pending
+                // read URBs.  The 8 s timeout lets the caller proceed even if
+                // the close thread is still running.
+                let (tx, rx) = std::sync::mpsc::channel::<()>();
+                std::thread::spawn(move || {
+                    c.close();
+                    let _ = tx.send(());
+                });
+                let _ = rx.recv_timeout(std::time::Duration::from_secs(8));
+            }
         }
 
         pub fn open_out(&mut self, port_name: &str) -> Result<(), MidiError> {
@@ -164,6 +185,15 @@ mod real {
 
         pub fn in_connected(&self)  -> bool { self.in_conn.is_some() }
         pub fn out_connected(&self) -> bool { self.out_tx.is_some() }
+    }
+
+    impl Drop for MidiManager {
+        fn drop(&mut self) {
+            // Close OUT first: signal the worker thread to stop, so no more
+            // messages are queued before we tear down the IN connection.
+            self.close_out();
+            self.close_in();
+        }
     }
 }
 
