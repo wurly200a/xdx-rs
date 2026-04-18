@@ -101,10 +101,11 @@ struct App {
     sysex_out_flash: f64,
     sysex_in_flash:  f64,
     // MIDI port list cache (populated by background scan thread)
-    in_ports:   Vec<String>,
-    out_ports:  Vec<String>,
-    scanning:   bool,
-    scan_rx:    Option<std::sync::mpsc::Receiver<(Vec<String>, Vec<String>)>>,
+    in_ports:    Vec<String>,
+    out_ports:   Vec<String>,
+    scanning:    bool,
+    scan_rx:     Option<std::sync::mpsc::Receiver<(Vec<String>, Vec<String>)>>,
+    scan_started: Option<std::time::Instant>,
     // 1-voice edit buffer
     voice:      Dx100Voice,
     name_buf:   String,
@@ -130,10 +131,11 @@ impl App {
             sysex_state:     SysExState::Idle,
             sysex_out_flash: f64::NEG_INFINITY,
             sysex_in_flash:  f64::NEG_INFINITY,
-            in_ports:   Vec::new(),
-            out_ports:  Vec::new(),
-            scanning:   false,
-            scan_rx:    None,
+            in_ports:    Vec::new(),
+            out_ports:   Vec::new(),
+            scanning:    false,
+            scan_rx:     None,
+            scan_started: None,
             voice,
             name_buf,
             file_path:       None,
@@ -148,16 +150,18 @@ impl App {
 
     /// Spawn a background thread to enumerate MIDI ports.
     /// The GUI thread never blocks waiting for WinMM.
+    /// If a previous scan is still running (hung), it is abandoned and a new
+    /// thread is started — the old thread will eventually be cleaned up on exit.
     fn start_port_scan(&mut self) {
-        if self.scanning { return; }
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let inp  = MidiManager::list_in_ports();
             let outp = MidiManager::list_out_ports();
             let _ = tx.send((inp, outp));
         });
-        self.scan_rx = Some(rx);
-        self.scanning = true;
+        self.scan_rx      = Some(rx);
+        self.scanning     = true;
+        self.scan_started = Some(std::time::Instant::now());
     }
 
     // ── 1-voice file I/O ──────────────────────────────────────────────────────
@@ -354,13 +358,24 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
-        // ── Collect background port-scan results ──────────────────────────────
+        // ── Collect background port-scan results (with timeout) ───────────────
+        const SCAN_TIMEOUT_SECS: f64 = 5.0;
         if let Some(rx) = &self.scan_rx {
             if let Ok((inp, outp)) = rx.try_recv() {
-                self.in_ports  = inp;
-                self.out_ports = outp;
-                self.scan_rx   = None;
-                self.scanning  = false;
+                self.in_ports    = inp;
+                self.out_ports   = outp;
+                self.scan_rx     = None;
+                self.scanning    = false;
+                self.scan_started = None;
+            } else if self.scan_started
+                .map(|t| t.elapsed().as_secs_f64() > SCAN_TIMEOUT_SECS)
+                .unwrap_or(false)
+            {
+                // WinMM hung — abandon the thread and allow retry
+                self.scan_rx     = None;
+                self.scanning    = false;
+                self.scan_started = None;
+                self.status = "MIDI port scan timed out (try: net stop audiosrv & net start audiosrv)".to_string();
             }
         }
 
@@ -395,8 +410,8 @@ impl eframe::App for App {
                     });
                     ui.separator();
                     let scan_label = if self.scanning { "Scanning..." } else { "Scan Ports" };
-                    if ui.add_enabled(!self.scanning, egui::Button::new(scan_label)).clicked() {
-                        self.start_port_scan();
+                    if ui.button(scan_label).clicked() {
+                        self.start_port_scan(); // always allowed; abandons any hung scan
                         ui.close_menu();
                     }
                     ui.separator();
