@@ -25,8 +25,9 @@ mod real {
     pub struct MidiManager {
         in_conn:    Option<MidiInputConnection<()>>,
         // OUT is owned by a worker thread; we communicate via a channel.
-        // Dropping out_tx causes the worker to exit and close the port.
-        out_tx:     Option<Sender<Vec<u8>>>,
+        // Some(data) → send the bytes.  None → send done, close port and exit.
+        // Dropping out_tx also causes the worker to exit and close the port.
+        out_tx:     Option<Sender<Option<Vec<u8>>>>,
         rx:         Option<Receiver<MidiEvent>>,
         pub in_port_name:  Option<String>,
         pub out_port_name: Option<String>,
@@ -118,11 +119,12 @@ mod real {
             // buffers through `tx`; the worker forwards them to MIDI OUT.
             // Dropping `tx` (via close_out) causes recv() to return Err,
             // which cleanly exits the worker and closes the port.
-            let (tx, rx) = mpsc::channel::<Vec<u8>>();
+            let (tx, rx) = mpsc::channel::<Option<Vec<u8>>>();
             std::thread::spawn(move || {
-                while let Ok(data) = rx.recv() {
+                while let Ok(Some(data)) = rx.recv() {
                     conn.send(&data).ok();
                 }
+                // Received None sentinel or sender dropped — close port cleanly.
                 conn.close();
             });
 
@@ -139,8 +141,21 @@ mod real {
         pub fn send(&mut self, data: &[u8]) -> Result<(), MidiError> {
             self.out_tx.as_ref()
                 .ok_or_else(|| MidiError("MIDI OUT not connected".to_string()))?
-                .send(data.to_vec())
+                .send(Some(data.to_vec()))
                 .map_err(|e| MidiError(e.to_string()))
+        }
+
+        /// Queue data then close OUT after the worker finishes sending.
+        /// The indicator goes gray immediately; the port closes in the background
+        /// once the last byte is transmitted.
+        pub fn send_then_close(&mut self, data: &[u8]) -> Result<(), MidiError> {
+            let tx = self.out_tx.as_ref()
+                .ok_or_else(|| MidiError("MIDI OUT not connected".to_string()))?;
+            tx.send(Some(data.to_vec())).map_err(|e| MidiError(e.to_string()))?;
+            tx.send(None).map_err(|e| MidiError(e.to_string()))?;
+            self.out_tx = None;
+            self.out_port_name = None;
+            Ok(())
         }
 
         pub fn try_recv(&mut self) -> Option<MidiEvent> {

@@ -563,7 +563,7 @@ impl eframe::App for App {
                     if ui.add_enabled(!any_fetch, egui::Button::new("Send")).clicked() {
                         let bytes = dx100_encode_32voice(&self.bank, 0);
                         let result = self.ensure_out()
-                            .and_then(|_| self.midi_manager.send(&bytes)
+                            .and_then(|_| self.midi_manager.send_then_close(&bytes)
                                 .map_err(|e| e.to_string()));
                         match result {
                             Ok(()) => {
@@ -675,7 +675,7 @@ impl eframe::App for App {
                 if ui.add_enabled(!any_fetch, egui::Button::new("Send")).clicked() {
                     let bytes = dx100_encode_1voice(&self.voice, 0);
                     let result = self.ensure_out()
-                        .and_then(|_| self.midi_manager.send(&bytes)
+                        .and_then(|_| self.midi_manager.send_then_close(&bytes)
                             .map_err(|e| e.to_string()));
                     match result {
                         Ok(()) => {
