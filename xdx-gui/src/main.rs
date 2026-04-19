@@ -2,7 +2,7 @@ mod audio;
 
 use eframe::egui::{self, Color32, Grid, RichText};
 use std::path::PathBuf;
-use xdx_core::dx100::Dx100Voice;
+use xdx_core::dx100::{Dx100Voice, BANK_VOICES, FREQ_RATIOS};
 use xdx_core::sysex::{
     dx100_decode_1voice, dx100_decode_32voice, dx100_encode_1voice, dx100_encode_32voice,
 };
@@ -25,17 +25,14 @@ const PIANO_KEYS: &[(egui::Key, u8)] = &[
 static IVORY_EBONY_SYX: &[u8] = include_bytes!("../../testdata/syx/IvoryEbony.syx");
 static ALL_VOICES_SYX:  &[u8] = include_bytes!("../../testdata/syx/all_voices.syx");
 
-// ── lookup tables (from original dx100ParamCtrl.c) ────────────────────────────
-const FREQ_TBL: &[&str] = &[
-    "0.50","0.71","0.78","0.87","1.00","1.41","1.57","1.73",
-    "2.00","2.82","3.00","3.14","3.46","4.00","4.24","4.71",
-    "5.00","5.19","5.65","6.00","6.28","6.92","7.00","7.07",
-    "7.85","8.00","8.48","8.65","9.00","9.42","9.89","10.00",
-    "10.38","10.99","11.00","11.30","12.00","12.11","12.56","12.72",
-    "13.00","13.84","14.00","14.10","14.13","15.00","15.55","15.57",
-    "15.70","16.96","17.27","17.30","18.37","18.84","19.03","19.78",
-    "20.41","20.76","21.20","21.98","22.49","23.55","24.22","25.95",
-];
+// ── lookup tables ─────────────────────────────────────────────────────────────
+// FREQ_TBL is derived from xdx_core::dx100::FREQ_RATIOS at first use.
+fn freq_tbl() -> &'static [String] {
+    use std::sync::OnceLock;
+    static TBL: OnceLock<Vec<String>> = OnceLock::new();
+    TBL.get_or_init(|| FREQ_RATIOS.iter().map(|&r| format!("{r:.2}")).collect())
+}
+
 const DETUNE_TBL:    &[&str] = &["-3","-2","-1","0","+1","+2","+3"];
 const LFO_WAVE_TBL:  &[&str] = &["SAW","SQU","TRI","S/H"];
 const ALGO_TBL:      &[&str] = &["1","2","3","4","5","6","7","8"];
@@ -48,23 +45,20 @@ const TRANSPOSE_TBL: &[&str] = &[
 const PORTA_MODE_TBL: &[&str] = &["Full","Fing"];
 const POLY_MONO_TBL:  &[&str] = &["POLY","MONO"];
 
-// DX100 has 24 internal voice slots (25-32 are unused in the VMEM format)
-const DX100_BANK_VOICES: usize = 24;
-
 // ── widget helpers ────────────────────────────────────────────────────────────
 
 fn dv(ui: &mut egui::Ui, val: &mut u8, min: u8, max: u8) {
     ui.add(egui::DragValue::new(val).range(min..=max));
 }
 
-fn cb(ui: &mut egui::Ui, id: impl std::hash::Hash, tbl: &[&str], val: &mut u8) {
-    let selected = tbl.get(*val as usize).copied().unwrap_or("?");
+fn cb(ui: &mut egui::Ui, id: impl std::hash::Hash, tbl: &[impl AsRef<str>], val: &mut u8) {
+    let selected = tbl.get(*val as usize).map(|s| s.as_ref()).unwrap_or("?");
     egui::ComboBox::from_id_source(id)
         .selected_text(selected)
         .width(52.0)
         .show_ui(ui, |ui| {
-            for (i, &label) in tbl.iter().enumerate() {
-                ui.selectable_value(val, i as u8, label);
+            for (i, label) in tbl.iter().enumerate() {
+                ui.selectable_value(val, i as u8, label.as_ref());
             }
         });
 }
@@ -698,7 +692,7 @@ impl eframe::App for App {
 
                 // Voice list: DX100 uses slots 1-24 only
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    let count = DX100_BANK_VOICES.min(self.bank.len());
+                    let count = BANK_VOICES.min(self.bank.len());
                     for i in 0..count {
                         let name  = self.bank[i].name_str();
                         let label = format!("{:02}  {}", i + 1, name);
@@ -906,7 +900,7 @@ fn show_dx100_voice(ui: &mut egui::Ui, v: &mut Dx100Voice, name_buf: &mut String
         for (op_idx, label) in [(3usize,"OPERATOR4"),(2,"OPERATOR3"),(1,"OPERATOR2"),(0,"OPERATOR1")] {
             let op = &mut v.ops[op_idx];
             ui.label(hdr(label));
-            cb(ui, ("freq",  op_idx), FREQ_TBL,   &mut op.freq_ratio);
+            cb(ui, ("freq",  op_idx), freq_tbl(), &mut op.freq_ratio);
             cb(ui, ("det",   op_idx), DETUNE_TBL, &mut op.detune);
             dv(ui, &mut op.ar,           0, 31);
             dv(ui, &mut op.d1r,          0, 31);

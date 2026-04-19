@@ -89,6 +89,9 @@ impl Default for Dx100Voice {
     }
 }
 
+/// Number of voice slots in a DX100 bank (slots 25-32 in VMEM are unused).
+pub const BANK_VOICES: usize = 24;
+
 /// Oscillator frequency ratio table: freq_ratio (0-63) → multiplier.
 /// Source: dx100ParamCtrl.c (authoritative hardware reference).
 pub const FREQ_RATIOS: [f32; 64] = [
