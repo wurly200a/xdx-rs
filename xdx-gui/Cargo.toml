@@ -9,7 +9,9 @@ real-midi    = ["xdx-midi/real-midi"]    # system MIDI (WinMM / CoreMIDI / ALSA)
 virtual-midi = ["xdx-midi/virtual-midi"] # stub: no system deps
 
 [dependencies]
-xdx-core = { path = "../xdx-core" }
-xdx-midi = { path = "../xdx-midi", default-features = false }
+xdx-core  = { path = "../xdx-core" }
+xdx-midi  = { path = "../xdx-midi", default-features = false }
+xdx-synth = { path = "../xdx-synth" }
 eframe = "0.28"
-rfd = "0.14"
+rfd    = "0.14"
+cpal   = "0.15"

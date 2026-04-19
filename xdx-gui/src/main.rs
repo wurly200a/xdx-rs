@@ -1,8 +1,26 @@
+mod audio;
+
 use eframe::egui::{self, Color32, Grid, RichText};
 use std::path::PathBuf;
 use xdx_core::dx100::Dx100Voice;
-use xdx_core::sysex::{dx100_decode_1voice, dx100_decode_32voice, dx100_encode_1voice, dx100_encode_32voice};
+use xdx_core::sysex::{
+    dx100_decode_1voice, dx100_decode_32voice, dx100_encode_1voice, dx100_encode_32voice,
+};
 use xdx_midi::{MidiEvent, MidiManager};
+
+// ── PC keyboard → MIDI note mapping (standard QWERTY piano layout) ────────────
+// Lower row  Z..M  : C4(60)–B4(71)   upper row  Q..U  : C5(72)–B5(83)
+// Black keys: S=C#4 D=D#4 G=F#4 H=G#4 J=A#4 / 2=C#5 3=D#5 5=F#5 6=G#5 7=A#5
+const PIANO_KEYS: &[(egui::Key, u8)] = &[
+    (egui::Key::Z,    60), (egui::Key::S,    61), (egui::Key::X,    62),
+    (egui::Key::D,    63), (egui::Key::C,    64), (egui::Key::V,    65),
+    (egui::Key::G,    66), (egui::Key::B,    67), (egui::Key::H,    68),
+    (egui::Key::N,    69), (egui::Key::J,    70), (egui::Key::M,    71),
+    (egui::Key::Q,    72), (egui::Key::Num2, 73), (egui::Key::W,    74),
+    (egui::Key::Num3, 75), (egui::Key::E,    76), (egui::Key::R,    77),
+    (egui::Key::Num5, 78), (egui::Key::T,    79), (egui::Key::Num6, 80),
+    (egui::Key::Y,    81), (egui::Key::Num7, 82), (egui::Key::U,    83),
+];
 
 static IVORY_EBONY_SYX: &[u8] = include_bytes!("../../testdata/syx/IvoryEbony.syx");
 static ALL_VOICES_SYX:  &[u8] = include_bytes!("../../testdata/syx/all_voices.syx");
@@ -92,6 +110,10 @@ fn main() -> eframe::Result<()> {
 
 struct App {
     synth_type: SynthType,
+    // Software synth
+    audio: Option<audio::AudioHandle>,
+    // MIDI keyboard routing
+    midi_kbd_active: bool,   // keep MIDI IN open; route NoteOn/Off → softsynth
     // MIDI
     midi_manager:   MidiManager,
     midi_in_sel:    Option<String>,
@@ -122,8 +144,11 @@ impl App {
         let voice = dx100_decode_1voice(IVORY_EBONY_SYX).expect("1-voice decode failed");
         let name_buf = voice.name_str();
         let bank = dx100_decode_32voice(ALL_VOICES_SYX).expect("32-voice decode failed");
+        let audio = audio::AudioHandle::start().ok();
         let mut app = Self {
             synth_type: SynthType::Dx100,
+            audio,
+            midi_kbd_active: false,
             midi_manager:    MidiManager::new(),
             midi_in_sel:     None,
             midi_out_sel:    None,
@@ -303,35 +328,68 @@ impl eframe::App for App {
 
         // ── Poll MIDI IN ──────────────────────────────────────────────────────
         while let Some(event) = self.midi_manager.try_recv() {
-            if let MidiEvent::SysEx(bytes) = event {
-                self.sysex_in_flash = now;
-                if bytes.len() >= 4 && bytes[3] == 0x04 {
-                    match dx100_decode_32voice(&bytes) {
-                        Ok(voices) => {
-                            self.bank = voices;
-                            self.bank_sel = 0;
-                            self.status = "Fetch 32: received 32-voice bank from synth".to_string();
+            match event {
+                MidiEvent::SysEx(bytes) => {
+                    self.sysex_in_flash = now;
+                    if bytes.len() >= 4 && bytes[3] == 0x04 {
+                        match dx100_decode_32voice(&bytes) {
+                            Ok(voices) => {
+                                self.bank = voices;
+                                self.bank_sel = 0;
+                                self.status = "Fetch 32: received 32-voice bank from synth".to_string();
+                            }
+                            Err(e) => {
+                                self.status = format!("Fetch 32 decode error: {e:?}");
+                            }
                         }
-                        Err(e) => {
-                            self.status = format!("Fetch 32 decode error: {e:?}");
+                    } else {
+                        match dx100_decode_1voice(&bytes) {
+                            Ok(voice) => {
+                                let name = voice.name_str();
+                                self.name_buf = name.clone();
+                                self.voice = voice;
+                                self.status = format!("Fetch 1: received \"{name}\" from synth");
+                            }
+                            Err(e) => {
+                                self.status = format!("Fetch 1 decode error: {e:?}");
+                            }
                         }
                     }
-                } else {
-                    match dx100_decode_1voice(&bytes) {
-                        Ok(voice) => {
-                            let name = voice.name_str();
-                            self.name_buf = name.clone();
-                            self.voice = voice;
-                            self.status = format!("Fetch 1: received \"{name}\" from synth");
-                        }
-                        Err(e) => {
-                            self.status = format!("Fetch 1 decode error: {e:?}");
+                    // Keep IN open if keyboard mode is active; always close OUT
+                    self.midi_manager.close_out();
+                    if !self.midi_kbd_active {
+                        self.midi_manager.close_in();
+                    }
+                    self.sysex_state = SysExState::Idle;
+                }
+                MidiEvent::Other(msg) => {
+                    // Route Note On / Note Off from external MIDI keyboard → softsynth
+                    if msg.len() >= 3 {
+                        let note = msg[1];
+                        let vel  = msg[2];
+                        match msg[0] & 0xF0 {
+                            0x90 if vel > 0 => {
+                                if let Some(ref a) = self.audio { a.note_on(note, vel); }
+                            }
+                            0x80 | 0x90 => {
+                                if let Some(ref a) = self.audio { a.note_off(note); }
+                            }
+                            _ => {}
                         }
                     }
                 }
-                self.midi_manager.close_in();
-                self.midi_manager.close_out();
-                self.sysex_state = SysExState::Idle;
+            }
+        }
+
+        // ── Keep MIDI IN open for keyboard when active ────────────────────────
+        if self.midi_kbd_active && !self.midi_manager.in_connected() {
+            if let Some(name) = self.midi_in_sel.clone() {
+                if let Err(e) = self.midi_manager.open_in(&name) {
+                    self.status = format!("MIDI KBD IN failed: {e}");
+                    self.midi_kbd_active = false;
+                }
+            } else {
+                self.midi_kbd_active = false;
             }
         }
 
@@ -355,6 +413,43 @@ impl eframe::App for App {
             || !matches!(self.sysex_state, SysExState::Idle)
             || self.scanning
         {
+            ctx.request_repaint();
+        }
+
+        // ── Software synth: push current voice ───────────────────────────────────
+        if let Some(ref audio) = self.audio {
+            audio.set_voice(self.voice.clone());
+        }
+
+        // ── PC keyboard → Softsynth + MIDI OUT ───────────────────────────────────
+        if !ctx.wants_keyboard_input() {
+            let mut pressed  = Vec::new();
+            let mut released = Vec::new();
+            ctx.input(|i| {
+                for &(key, note) in PIANO_KEYS {
+                    if i.key_pressed(key)  { pressed.push(note); }
+                    if i.key_released(key) { released.push(note); }
+                }
+            });
+            for note in pressed {
+                if let Some(ref a) = self.audio { a.note_on(note, 100); }
+                if self.midi_manager.out_connected() {
+                    let _ = self.midi_manager.send(&[0x90, note, 100]);
+                }
+            }
+            for note in released {
+                if let Some(ref a) = self.audio { a.note_off(note); }
+                if self.midi_manager.out_connected() {
+                    let _ = self.midi_manager.send(&[0x80, note, 0]);
+                }
+            }
+            if self.audio.is_some() || self.midi_manager.out_connected() {
+                ctx.request_repaint();
+            }
+        }
+
+        // Request repaint while MIDI keyboard is active (to keep polling IN)
+        if self.midi_kbd_active {
             ctx.request_repaint();
         }
 
@@ -446,6 +541,30 @@ impl eframe::App for App {
                 ui.label(format!("IN: {in_name}"));
                 ui.label(dot(self.midi_manager.out_connected(), out_flash));
                 ui.label(format!("OUT: {out_name}"));
+                ui.separator();
+                let audio_ok = self.audio.is_some();
+                ui.label(RichText::new("●").color(if audio_ok { Color32::GREEN } else { Color32::RED }));
+                if audio_ok {
+                    ui.label(RichText::new("Audio  Z..M / Q..U").small());
+                } else {
+                    ui.label(RichText::new("Audio: no device").small().color(Color32::RED));
+                }
+                ui.separator();
+                let kbd_dot = RichText::new("●").color(
+                    if self.midi_kbd_active { Color32::GREEN } else { Color32::from_gray(110) }
+                );
+                ui.label(kbd_dot);
+                let can_toggle = self.midi_in_sel.is_some();
+                let btn_text = if self.midi_kbd_active { "MIDI KBD: ON" } else { "MIDI KBD: OFF" };
+                if ui.add_enabled(can_toggle, egui::Button::new(RichText::new(btn_text).small()))
+                    .on_hover_text("Toggle MIDI IN open for keyboard input (requires MIDI IN device)")
+                    .clicked()
+                {
+                    self.midi_kbd_active = !self.midi_kbd_active;
+                    if !self.midi_kbd_active && matches!(self.sysex_state, SysExState::Idle) {
+                        self.midi_manager.close_in();
+                    }
+                }
             });
         });
 
