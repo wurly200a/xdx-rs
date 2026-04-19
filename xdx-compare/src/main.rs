@@ -67,27 +67,48 @@ fn main() {
 
     // ── 1. Render softsynth ───────────────────────────────────────────────────
     let synth_path = format!("{out_dir}/synth.wav");
-    let synth_rms = render_synth(&voice, midi_note, duration, release, &synth_path);
-    println!("\n[synth]  → {synth_path}  RMS={synth_rms:.4}");
+    let synth = render_synth(&voice, midi_note, duration, release, &synth_path);
+    println!("\n[synth]  → {synth_path}");
+    print_stats("synth ", &synth);
 
     // ── 2. Record DX100 ───────────────────────────────────────────────────────
     if midi_out.is_some() && audio_in.is_some() {
         let dx100_path = format!("{out_dir}/dx100.wav");
-        let dx100_rms = record_dx100(
+        let dx100 = record_dx100(
             midi_note, channel, duration, release,
             midi_out.as_deref().unwrap(),
             audio_in.as_deref().unwrap(),
             &dx100_path,
         );
-        println!("[dx100]  → {dx100_path}  RMS={dx100_rms:.4}");
+        println!("[dx100]  → {dx100_path}");
+        print_stats("dx100 ", &dx100);
 
-        let ratio = if synth_rms > 0.0 { dx100_rms / synth_rms } else { 0.0 };
-        println!("\nRMS ratio dx100/synth: {ratio:.3}");
+        println!("\n── Comparison ──────────────────────────────────────────────────");
+        let level_ratio = if synth.sustain_rms > 0.0 { dx100.sustain_rms / synth.sustain_rms } else { 0.0 };
+        let level_db    = if level_ratio > 0.0 { 20.0 * level_ratio.log10() } else { f32::NEG_INFINITY };
+        println!("  sustain level dx100/synth : {level_ratio:.4}  ({level_db:+.1} dB)");
+        let cf_diff = dx100.crest_factor - synth.crest_factor;
+        println!("  crest-factor dx100-synth  : {:+.4}  (>0 = dx100 has more harmonics)", cf_diff);
+        if dx100.peak < 0.01 {
+            println!("  ⚠  DX100 peak={:.4} — recording level very low; check hardware volume / input gain", dx100.peak);
+        }
     } else {
         if midi_out.is_none() { println!("\n(skip DX100 recording: --midi-out not specified)"); }
         if audio_in.is_none() { println!("(skip DX100 recording: --audio-in not specified)"); }
         println!("Run with --list to see available devices.");
     }
+}
+
+struct AudioStats {
+    rms:          f32,   // full-window RMS (hold + release)
+    peak:         f32,   // peak absolute sample
+    sustain_rms:  f32,   // RMS of middle 50% of hold window (steady state)
+    crest_factor: f32,   // sustain_rms / peak  (sine wave ≈ 0.707)
+}
+
+fn print_stats(label: &str, s: &AudioStats) {
+    println!("  {label}  rms={:.4}  peak={:.4}  sustain_rms={:.4}  crest={:.4}",
+        s.rms, s.peak, s.sustain_rms, s.crest_factor);
 }
 
 // ── Softsynth render ──────────────────────────────────────────────────────────
@@ -98,10 +119,13 @@ fn render_synth(
     duration_s: f32,
     release_s: f32,
     out_path: &str,
-) -> f32 {
+) -> AudioStats {
     const SR: u32 = 44100;
-    let total   = ((duration_s + release_s) * SR as f32) as usize;
+    let total    = ((duration_s + release_s) * SR as f32) as usize;
     let note_off = (duration_s * SR as f32) as usize;
+    // Sustain window: middle 50% of hold (skip attack and release lead-in)
+    let sus_start = (duration_s * 0.25 * SR as f32) as usize;
+    let sus_end   = (duration_s * 0.75 * SR as f32) as usize;
 
     let mut engine = FmEngine::new(SR as f32);
     engine.set_voice(voice.clone());
@@ -117,6 +141,9 @@ fn render_synth(
     let mut buf = vec![0.0f32; 512];
     let mut pos = 0usize;
     let mut sum_sq = 0.0f64;
+    let mut sus_sq = 0.0f64;
+    let mut sus_n  = 0usize;
+    let mut peak   = 0.0f32;
 
     while pos < total {
         let chunk = buf.len().min(total - pos);
@@ -124,15 +151,25 @@ fn render_synth(
         if pos < note_off && pos + chunk >= note_off {
             engine.note_off(midi_note);
         }
-        for &s in &buf[..chunk] {
+        for (j, &s) in buf[..chunk].iter().enumerate() {
+            let i = pos + j;
             sum_sq += (s as f64).powi(2);
+            if s.abs() > peak { peak = s.abs(); }
+            if i >= sus_start && i < sus_end {
+                sus_sq += (s as f64).powi(2);
+                sus_n  += 1;
+            }
             let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             writer.write_sample(v).unwrap();
         }
         pos += chunk;
     }
     writer.finalize().unwrap();
-    (sum_sq / total as f64).sqrt() as f32
+
+    let rms         = (sum_sq / total as f64).sqrt() as f32;
+    let sustain_rms = if sus_n > 0 { (sus_sq / sus_n as f64).sqrt() as f32 } else { 0.0 };
+    let crest_factor = if peak > 0.0 { sustain_rms / peak } else { 0.0 };
+    AudioStats { rms, peak, sustain_rms, crest_factor }
 }
 
 // ── DX100 recording ───────────────────────────────────────────────────────────
@@ -145,7 +182,7 @@ fn record_dx100(
     midi_out_name: &str,
     audio_in_name: &str,
     out_path: &str,
-) -> f32 {
+) -> AudioStats {
     const PRE_DELAY_MS: u64 = 300;
 
     // ── Open audio input ──────────────────────────────────────────────────────
@@ -187,8 +224,8 @@ fn record_dx100(
     midi.open_out(midi_out_name)
         .unwrap_or_else(|e| panic!("MIDI OUT open failed: {e}"));
 
-    let note_on  = [0x90 | (channel - 1), midi_note, 100];
-    let note_off = [0x80 | (channel - 1), midi_note, 0];
+    let note_on      = [0x90 | (channel - 1), midi_note, 100];
+    let note_off_msg = [0x80 | (channel - 1), midi_note, 0];
 
     // ── Timing sequence ───────────────────────────────────────────────────────
     println!("  waiting {PRE_DELAY_MS}ms pre-delay…");
@@ -199,16 +236,36 @@ fn record_dx100(
     std::thread::sleep(Duration::from_secs_f32(duration_s));
 
     println!("  Note Off");
-    midi.send(&note_off).expect("send Note Off");
+    midi.send(&note_off_msg).expect("send Note Off");
     std::thread::sleep(Duration::from_secs_f32(release_s));
 
     // ── Stop and save ─────────────────────────────────────────────────────────
     drop(stream);
 
-    let samples = buffer.lock().unwrap().clone();
-    let total   = samples.len();
-    let sum_sq: f64 = samples.iter().map(|&s| (s as f64).powi(2)).sum();
-    let rms = (sum_sq / total as f64).sqrt() as f32;
+    let samples  = buffer.lock().unwrap().clone();
+    let total    = samples.len();
+
+    // Sustain window: middle 50% of hold within the recording
+    let note_on_sample   = (PRE_DELAY_MS as f32 / 1000.0 * sr as f32) as usize;
+    let note_dur_samples = (duration_s * sr as f32) as usize;
+    let sus_start = note_on_sample + note_dur_samples / 4;
+    let sus_end   = note_on_sample + note_dur_samples * 3 / 4;
+
+    let mut sum_sq = 0.0f64;
+    let mut sus_sq = 0.0f64;
+    let mut sus_n  = 0usize;
+    let mut peak   = 0.0f32;
+    for (i, &s) in samples.iter().enumerate() {
+        sum_sq += (s as f64).powi(2);
+        if s.abs() > peak { peak = s.abs(); }
+        if i >= sus_start && i < sus_end {
+            sus_sq += (s as f64).powi(2);
+            sus_n  += 1;
+        }
+    }
+    let rms         = (sum_sq / total as f64).sqrt() as f32;
+    let sustain_rms = if sus_n > 0 { (sus_sq / sus_n as f64).sqrt() as f32 } else { 0.0 };
+    let crest_factor = if peak > 0.0 { sustain_rms / peak } else { 0.0 };
 
     let spec = hound::WavSpec {
         channels: 1, sample_rate: sr,
@@ -222,7 +279,7 @@ fn record_dx100(
     }
     writer.finalize().unwrap();
 
-    rms
+    AudioStats { rms, peak, sustain_rms, crest_factor }
 }
 
 // ── Device listing ────────────────────────────────────────────────────────────

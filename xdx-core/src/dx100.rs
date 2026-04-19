@@ -53,25 +53,25 @@ pub struct Dx100Voice {
     pub pitch_eg_level: [u8; 3], // PEG Level 1-3 (0-99)
 }
 
+/// Base operator for DX100 INIT VOICE (AR=31, D1R=31, D1L=15, RR=15, D2R=0).
+fn init_op_base() -> Dx100Operator {
+    Dx100Operator { ar: 31, d1r: 31, d2r: 0, rr: 15, d1l: 15,
+        kbd_lev_scl: 0, kbd_rate_scl: 0,
+        eg_bias_sens: 0, amp_mod_en: 0, key_vel_sens: 0,
+        out_level: 0, freq_ratio: 4, detune: 3 }
+}
+
 impl Default for Dx100Operator {
-    fn default() -> Self {
-        Self {
-            ar: 0, d1r: 0, d2r: 0, rr: 0, d1l: 0,
-            kbd_lev_scl: 0, kbd_rate_scl: 0,
-            eg_bias_sens: 0, amp_mod_en: 0, key_vel_sens: 0,
-            out_level: 0, freq_ratio: 0, detune: 3,
-        }
-    }
+    fn default() -> Self { init_op_base() }
 }
 
 impl Default for Dx100Voice {
+    /// DX100 INIT VOICE: algorithm 0, OP1 carrier (out_level=90), OP2-4 silent.
     fn default() -> Self {
         Self {
             ops: [
-                Dx100Operator::default(),
-                Dx100Operator::default(),
-                Dx100Operator::default(),
-                Dx100Operator::default(),
+                Dx100Operator { out_level: 90, ..init_op_base() },
+                init_op_base(), init_op_base(), init_op_base(),
             ],
             algorithm: 0, feedback: 0,
             lfo_speed: 0, lfo_delay: 0, lfo_pmd: 0, lfo_amd: 0,
