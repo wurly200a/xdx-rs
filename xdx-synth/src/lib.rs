@@ -162,7 +162,11 @@ impl Note {
     fn render_sample(&mut self, algo: u8, fb_depth: f32, sr: f32) -> f32 {
         // Evaluate operators in modulator-first order for each algorithm.
         // ops[0]=OP1(feedback), [1]=OP2, [2]=OP3, [3]=OP4
-        // Feedback: OP1 phase-modulates itself via its previous output.
+        //
+        // Modulation depth scaling: operator output is in [-amp, +amp] where
+        // amp ≤ 1.0.  Yamaha FM hardware scales this to ≈ ±2π radians at full
+        // level before adding to the carrier phase.  We replicate that here by
+        // multiplying every modulator→carrier connection by TAU.
         let fb_mod = self.fb_prev * fb_depth;
 
         match algo {
@@ -170,36 +174,36 @@ impl Note {
             // Alg 0: OP4→OP3→OP2→OP1(C)
             0 => {
                 let o4 = self.ops[3].tick(sr, 0.0);
-                let o3 = self.ops[2].tick(sr, o4);
-                let o2 = self.ops[1].tick(sr, o3);
-                let o1 = self.ops[0].tick(sr, o2 + fb_mod);
+                let o3 = self.ops[2].tick(sr, o4 * TAU);
+                let o2 = self.ops[1].tick(sr, o3 * TAU);
+                let o1 = self.ops[0].tick(sr, o2 * TAU + fb_mod);
                 self.fb_prev = o1;
                 o1
             }
-            // Alg 1: [OP4→OP3, OP2] → OP1(C)  (OP3 and OP2 both mod OP1)
+            // Alg 1: [OP4→OP3, OP2] → OP1(C)
             1 => {
                 let o4 = self.ops[3].tick(sr, 0.0);
                 let o2 = self.ops[1].tick(sr, 0.0);
-                let o3 = self.ops[2].tick(sr, o4);
-                let o1 = self.ops[0].tick(sr, o3 + o2 + fb_mod);
+                let o3 = self.ops[2].tick(sr, o4 * TAU);
+                let o1 = self.ops[0].tick(sr, (o3 + o2) * TAU + fb_mod);
                 self.fb_prev = o1;
                 o1
             }
-            // Alg 2: OP4→[OP3+OP2] → OP1(C)  (OP4 mods both OP3 and OP2)
+            // Alg 2: OP4→[OP3+OP2]→OP1(C)
             2 => {
                 let o4 = self.ops[3].tick(sr, 0.0);
-                let o3 = self.ops[2].tick(sr, o4);
-                let o2 = self.ops[1].tick(sr, o4);
-                let o1 = self.ops[0].tick(sr, o3 + o2 + fb_mod);
+                let o3 = self.ops[2].tick(sr, o4 * TAU);
+                let o2 = self.ops[1].tick(sr, o4 * TAU);
+                let o1 = self.ops[0].tick(sr, (o3 + o2) * TAU + fb_mod);
                 self.fb_prev = o1;
                 o1
             }
-            // Alg 3: [OP4+OP3+OP2] → OP1(C)
+            // Alg 3: [OP4+OP3+OP2]→OP1(C)
             3 => {
                 let o4 = self.ops[3].tick(sr, 0.0);
                 let o3 = self.ops[2].tick(sr, 0.0);
                 let o2 = self.ops[1].tick(sr, 0.0);
-                let o1 = self.ops[0].tick(sr, o4 + o3 + o2 + fb_mod);
+                let o1 = self.ops[0].tick(sr, (o4 + o3 + o2) * TAU + fb_mod);
                 self.fb_prev = o1;
                 o1
             }
@@ -208,8 +212,8 @@ impl Note {
             4 => {
                 let o4 = self.ops[3].tick(sr, 0.0);
                 let o2 = self.ops[1].tick(sr, 0.0);
-                let o3 = self.ops[2].tick(sr, o4);
-                let o1 = self.ops[0].tick(sr, o2 + fb_mod);
+                let o3 = self.ops[2].tick(sr, o4 * TAU);
+                let o1 = self.ops[0].tick(sr, o2 * TAU + fb_mod);
                 self.fb_prev = o1;
                 (o3 + o1) * 0.5
             }
@@ -217,16 +221,16 @@ impl Note {
             // Alg 5: OP4→[OP3(C)+OP2(C)+OP1(C)]
             5 => {
                 let o4 = self.ops[3].tick(sr, 0.0);
-                let o3 = self.ops[2].tick(sr, o4);
-                let o2 = self.ops[1].tick(sr, o4);
-                let o1 = self.ops[0].tick(sr, o4 + fb_mod);
+                let o3 = self.ops[2].tick(sr, o4 * TAU);
+                let o2 = self.ops[1].tick(sr, o4 * TAU);
+                let o1 = self.ops[0].tick(sr, o4 * TAU + fb_mod);
                 self.fb_prev = o1;
                 (o3 + o2 + o1) / 3.0
             }
             // Alg 6: [OP4→OP3(C)] + OP2(C) + OP1(C)
             6 => {
                 let o4 = self.ops[3].tick(sr, 0.0);
-                let o3 = self.ops[2].tick(sr, o4);
+                let o3 = self.ops[2].tick(sr, o4 * TAU);
                 let o2 = self.ops[1].tick(sr, 0.0);
                 let o1 = self.ops[0].tick(sr, fb_mod);
                 self.fb_prev = o1;
