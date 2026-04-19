@@ -25,6 +25,34 @@ const PIANO_KEYS: &[(egui::Key, u8)] = &[
 static IVORY_EBONY_SYX: &[u8] = include_bytes!("../../testdata/syx/IvoryEbony.syx");
 static ALL_VOICES_SYX:  &[u8] = include_bytes!("../../testdata/syx/all_voices.syx");
 
+static ALGO_BMPS: [&[u8]; 8] = [
+    include_bytes!("../assets/dx100_01.bmp"),
+    include_bytes!("../assets/dx100_02.bmp"),
+    include_bytes!("../assets/dx100_03.bmp"),
+    include_bytes!("../assets/dx100_04.bmp"),
+    include_bytes!("../assets/dx100_05.bmp"),
+    include_bytes!("../assets/dx100_06.bmp"),
+    include_bytes!("../assets/dx100_07.bmp"),
+    include_bytes!("../assets/dx100_08.bmp"),
+];
+
+fn load_algo_textures(ctx: &egui::Context) -> Vec<egui::TextureHandle> {
+    ALGO_BMPS.iter().enumerate().map(|(i, bytes)| {
+        let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Bmp)
+            .unwrap_or_else(|_| image::DynamicImage::new_rgba8(1, 1));
+        let rgba = img.to_rgba8();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        let pixels: Vec<egui::Color32> = rgba.pixels()
+            .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
+            .collect();
+        ctx.load_texture(
+            format!("algo_{i}"),
+            egui::ColorImage { size, pixels },
+            egui::TextureOptions::default(),
+        )
+    }).collect()
+}
+
 // ── lookup tables ─────────────────────────────────────────────────────────────
 // FREQ_TBL is derived from xdx_core::dx100::FREQ_RATIOS at first use.
 fn freq_tbl() -> &'static [String] {
@@ -99,7 +127,7 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1150.0, 580.0]),
         ..Default::default()
     };
-    eframe::run_native("xdx", options, Box::new(|_cc| Ok(Box::new(App::new()))))
+    eframe::run_native("xdx", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }
 
 struct App {
@@ -131,14 +159,16 @@ struct App {
     bank_sel:       usize,
     bank_file_path: Option<PathBuf>,
     status:     String,
+    algo_textures: Vec<egui::TextureHandle>,
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let voice = dx100_decode_1voice(IVORY_EBONY_SYX).expect("1-voice decode failed");
         let name_buf = voice.name_str();
         let bank = dx100_decode_32voice(ALL_VOICES_SYX).expect("32-voice decode failed");
         let audio = audio::AudioHandle::start().ok();
+        let algo_textures = load_algo_textures(&cc.egui_ctx);
         let mut app = Self {
             synth_type: SynthType::Dx100,
             audio,
@@ -162,6 +192,7 @@ impl App {
             bank_sel:        0,
             bank_file_path:  None,
             status: "Test data loaded".to_string(),
+            algo_textures,
         };
         app.start_port_scan(); // scan in background at startup
         app
@@ -803,7 +834,7 @@ impl eframe::App for App {
             ui.separator();
 
             egui::ScrollArea::both().show(ui, |ui| {
-                show_dx100_voice(ui, &mut self.voice, &mut self.name_buf);
+                show_dx100_voice(ui, &mut self.voice, &mut self.name_buf, &self.algo_textures);
             });
         });
     }
@@ -811,22 +842,42 @@ impl eframe::App for App {
 
 // ── main panel ────────────────────────────────────────────────────────────────
 
-fn show_dx100_voice(ui: &mut egui::Ui, v: &mut Dx100Voice, name_buf: &mut String) {
+fn show_dx100_voice(
+    ui: &mut egui::Ui,
+    v: &mut Dx100Voice,
+    name_buf: &mut String,
+    algo_textures: &[egui::TextureHandle],
+) {
     let sp = [8.0_f32, 4.0_f32];
 
-    // ── PATCHNAME ─────────────────────────────────────────────────────────────
+    // ── PATCHNAME + algorithm diagram ─────────────────────────────────────────
     ui.horizontal(|ui| {
-        ui.label(hdr("PATCHNAME"));
-        let resp = ui.add(
-            egui::TextEdit::singleline(name_buf)
-                .desired_width(88.0)
-                .font(egui::TextStyle::Monospace)
-        );
-        if resp.changed() {
-            name_buf.truncate(10);
-            for (i, b) in v.name.iter_mut().enumerate() {
-                *b = name_buf.as_bytes().get(i).copied().unwrap_or(b' ');
-            }
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(hdr("PATCHNAME"));
+                let resp = ui.add(
+                    egui::TextEdit::singleline(name_buf)
+                        .desired_width(88.0)
+                        .font(egui::TextStyle::Monospace)
+                );
+                if resp.changed() {
+                    name_buf.truncate(10);
+                    for (i, b) in v.name.iter_mut().enumerate() {
+                        *b = name_buf.as_bytes().get(i).copied().unwrap_or(b' ');
+                    }
+                }
+            });
+        });
+        ui.add_space(16.0);
+        if let Some(tex) = algo_textures.get(v.algorithm as usize) {
+            ui.vertical(|ui| {
+                ui.label(hdr(&format!("ALGORITHM {}", v.algorithm + 1)));
+                ui.add(
+                    egui::Image::new(tex)
+                        .max_size(egui::vec2(246.0, 100.0))
+                        .maintain_aspect_ratio(true),
+                );
+            });
         }
     });
     ui.add_space(4.0);

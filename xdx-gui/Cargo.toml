@@ -15,3 +15,4 @@ xdx-synth = { path = "../xdx-synth" }
 eframe = "0.28"
 rfd    = "0.14"
 cpal   = "0.15"
+image  = { version = "0.25", default-features = false, features = ["bmp"] }
