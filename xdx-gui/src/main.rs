@@ -850,71 +850,72 @@ fn show_dx100_voice(
 ) {
     let sp = [8.0_f32, 4.0_f32];
 
-    // ── PATCHNAME ─────────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
-        ui.label(hdr("PATCHNAME"));
-        let resp = ui.add(
-            egui::TextEdit::singleline(name_buf)
-                .desired_width(88.0)
-                .font(egui::TextStyle::Monospace)
-        );
-        if resp.changed() {
-            name_buf.truncate(10);
-            for (i, b) in v.name.iter_mut().enumerate() {
-                *b = name_buf.as_bytes().get(i).copied().unwrap_or(b' ');
-            }
-        }
-    });
-    ui.add_space(4.0);
-
-    // ── Global + per-operator AME / EG BIAS / VELOCITY ───────────────────────
-    ui.horizontal(|ui| {
-        ui.add_space(120.0);
-        section_label(ui, "-------------- LFO --------------");
-        ui.add_space(30.0);
-        section_label(ui, "-- MODULATION SENSITIVITY --");
-        ui.add_space(18.0);
-        section_label(ui, "-- KEY --");
-    });
-
-    Grid::new("global").num_columns(14).spacing(sp).show(ui, |ui| {
-        for h in &["ALGORITHM","FEEDBACK","WAVE","SPEED","DELAY","PMD","AMD","SYNC",
-                   "PITCH","AMPLITUDE","AME","EG BIAS","VELOCITY",""] {
-            ui.label(hdr(h));
-        }
-        ui.end_row();
-
-        cb(ui, "algo",    ALGO_TBL,     &mut v.algorithm);
-        dv(ui, &mut v.feedback,         0, 7);
-        cb(ui, "lfowave", LFO_WAVE_TBL, &mut v.lfo_wave);
-        dv(ui, &mut v.lfo_speed,        0, 99);
-        dv(ui, &mut v.lfo_delay,        0, 99);
-        dv(ui, &mut v.lfo_pmd,          0, 99);
-        dv(ui, &mut v.lfo_amd,          0, 99);
-        chk(ui, &mut v.lfo_sync);
-        dv(ui, &mut v.pitch_mod_sens,   0, 7);
-        dv(ui, &mut v.amp_mod_sens,     0, 3);
-        chk(ui, &mut v.ops[3].amp_mod_en);
-        dv(ui, &mut v.ops[3].eg_bias_sens, 0, 7);
-        dv(ui, &mut v.ops[3].key_vel_sens, 0, 7);
-        ui.label(hdr("OPERATOR4"));
-        ui.end_row();
-
-        for (op_idx, label) in [(2usize,"OPERATOR3"),(1,"OPERATOR2"),(0,"OPERATOR1")] {
-            for _ in 0..10 { ui.label(""); }
-            chk(ui, &mut v.ops[op_idx].amp_mod_en);
-            dv(ui, &mut v.ops[op_idx].eg_bias_sens, 0, 7);
-            dv(ui, &mut v.ops[op_idx].key_vel_sens, 0, 7);
-            ui.label(hdr(label));
-            ui.end_row();
-        }
-    });
-
-    ui.add_space(6.0);
-
-    // ── OSCILLATOR + EG + KEY SCALING + PITCH EG ─────────────────────────────
-    ui.horizontal(|ui| {
+        // ── Left: all params ─────────────────────────────────────────────────
         ui.vertical(|ui| {
+            // ── PATCHNAME ─────────────────────────────────────────────────────
+            ui.horizontal(|ui| {
+                ui.label(hdr("PATCHNAME"));
+                let resp = ui.add(
+                    egui::TextEdit::singleline(name_buf)
+                        .desired_width(88.0)
+                        .font(egui::TextStyle::Monospace)
+                );
+                if resp.changed() {
+                    name_buf.truncate(10);
+                    for (i, b) in v.name.iter_mut().enumerate() {
+                        *b = name_buf.as_bytes().get(i).copied().unwrap_or(b' ');
+                    }
+                }
+            });
+            ui.add_space(4.0);
+
+            // ── Global + per-operator AME / EG BIAS / VELOCITY ────────────────
+            ui.horizontal(|ui| {
+                ui.add_space(120.0);
+                section_label(ui, "-------------- LFO --------------");
+                ui.add_space(30.0);
+                section_label(ui, "-- MODULATION SENSITIVITY --");
+                ui.add_space(18.0);
+                section_label(ui, "-- KEY --");
+            });
+
+            Grid::new("global").num_columns(14).spacing(sp).show(ui, |ui| {
+                for h in &["ALGORITHM","FEEDBACK","WAVE","SPEED","DELAY","PMD","AMD","SYNC",
+                           "PITCH","AMPLITUDE","AME","EG BIAS","VELOCITY",""] {
+                    ui.label(hdr(h));
+                }
+                ui.end_row();
+
+                cb(ui, "algo",    ALGO_TBL,     &mut v.algorithm);
+                dv(ui, &mut v.feedback,         0, 7);
+                cb(ui, "lfowave", LFO_WAVE_TBL, &mut v.lfo_wave);
+                dv(ui, &mut v.lfo_speed,        0, 99);
+                dv(ui, &mut v.lfo_delay,        0, 99);
+                dv(ui, &mut v.lfo_pmd,          0, 99);
+                dv(ui, &mut v.lfo_amd,          0, 99);
+                chk(ui, &mut v.lfo_sync);
+                dv(ui, &mut v.pitch_mod_sens,   0, 7);
+                dv(ui, &mut v.amp_mod_sens,     0, 3);
+                chk(ui, &mut v.ops[3].amp_mod_en);
+                dv(ui, &mut v.ops[3].eg_bias_sens, 0, 7);
+                dv(ui, &mut v.ops[3].key_vel_sens, 0, 7);
+                ui.label(hdr("OPERATOR4"));
+                ui.end_row();
+
+                for (op_idx, label) in [(2usize,"OPERATOR3"),(1,"OPERATOR2"),(0,"OPERATOR1")] {
+                    for _ in 0..10 { ui.label(""); }
+                    chk(ui, &mut v.ops[op_idx].amp_mod_en);
+                    dv(ui, &mut v.ops[op_idx].eg_bias_sens, 0, 7);
+                    dv(ui, &mut v.ops[op_idx].key_vel_sens, 0, 7);
+                    ui.label(hdr(label));
+                    ui.end_row();
+                }
+            });
+
+            ui.add_space(6.0);
+
+            // ── OSCILLATOR + EG + KEY SCALING + PITCH EG ──────────────────────
             ui.horizontal(|ui| {
                 ui.add_space(66.0);
                 section_label(ui, "- OSCILLATOR -");
@@ -959,11 +960,53 @@ fn show_dx100_voice(
                     ui.end_row();
                 }
             });
-        });
 
-        // ── Algorithm diagram (right of operator rows) ────────────────────────
+            ui.add_space(6.0);
+
+            // ── Performance controls ───────────────────────────────────────────
+            ui.horizontal(|ui| {
+                ui.add_space(60.0);
+                section_label(ui, "PITCH BEND");
+                ui.add_space(32.0);
+                section_label(ui, "-------- PORTAMENTO --------");
+                ui.add_space(16.0);
+                section_label(ui, "---- FOOT CONTROL ----");
+                ui.add_space(16.0);
+                section_label(ui, "-- WHEEL RANGE --");
+                ui.add_space(8.0);
+                section_label(ui, "------ BREATH CONTROLLER RANGE ------");
+            });
+
+            Grid::new("perf").num_columns(15).spacing(sp).show(ui, |ui| {
+                for h in &["POLY/MONO","RANGE","MODE","TIME","FOOT SW","VOLUME","SUSTAIN",
+                           "PITCH","AMPLITUDE","PITCH","AMPLITUDE","PITCH BIAS","EG BIAS",
+                           "CHORUS","TRANSPOSE"] {
+                    ui.label(hdr(h));
+                }
+                ui.end_row();
+
+                cb(ui, "polymono",   POLY_MONO_TBL,  &mut v.poly_mono);
+                dv(ui, &mut v.pb_range,              0, 12);
+                cb(ui, "portamode",  PORTA_MODE_TBL, &mut v.porta_mode);
+                dv(ui, &mut v.porta_time,            0, 99);
+                chk(ui, &mut v.portamento);
+                dv(ui, &mut v.fc_volume,             0, 99);
+                chk(ui, &mut v.sustain);
+                dv(ui, &mut v.mw_pitch,             0, 99);
+                dv(ui, &mut v.mw_amplitude,         0, 99);
+                dv(ui, &mut v.bc_pitch,             0, 99);
+                dv(ui, &mut v.bc_amplitude,         0, 99);
+                dv(ui, &mut v.bc_pitch_bias,        0, 99);
+                dv(ui, &mut v.bc_eg_bias,           0, 99);
+                chk(ui, &mut v.chorus);
+                cb(ui, "transpose",  TRANSPOSE_TBL,  &mut v.transpose);
+                ui.end_row();
+            });
+        }); // end left ui.vertical
+
+        // ── Right: algorithm diagram (top-aligned with PATCHNAME) ────────────
         if let Some(tex) = algo_textures.get(v.algorithm as usize) {
-            ui.add_space(12.0);
+            ui.add_space(8.0);
             ui.vertical(|ui| {
                 ui.label(hdr(&format!("ALGORITHM {}", v.algorithm + 1)));
                 ui.add(
@@ -973,47 +1016,5 @@ fn show_dx100_voice(
                 );
             });
         }
-    });
-
-    ui.add_space(6.0);
-
-    // ── Performance controls ──────────────────────────────────────────────────
-    ui.horizontal(|ui| {
-        ui.add_space(60.0);
-        section_label(ui, "PITCH BEND");
-        ui.add_space(32.0);
-        section_label(ui, "-------- PORTAMENTO --------");
-        ui.add_space(16.0);
-        section_label(ui, "---- FOOT CONTROL ----");
-        ui.add_space(16.0);
-        section_label(ui, "-- WHEEL RANGE --");
-        ui.add_space(8.0);
-        section_label(ui, "------ BREATH CONTROLLER RANGE ------");
-    });
-
-    Grid::new("perf").num_columns(15).spacing(sp).show(ui, |ui| {
-        for h in &["POLY/MONO","RANGE","MODE","TIME","FOOT SW","VOLUME","SUSTAIN",
-                   "PITCH","AMPLITUDE","PITCH","AMPLITUDE","PITCH BIAS","EG BIAS",
-                   "CHORUS","TRANSPOSE"] {
-            ui.label(hdr(h));
-        }
-        ui.end_row();
-
-        cb(ui, "polymono",   POLY_MONO_TBL,  &mut v.poly_mono);
-        dv(ui, &mut v.pb_range,              0, 12);
-        cb(ui, "portamode",  PORTA_MODE_TBL, &mut v.porta_mode);
-        dv(ui, &mut v.porta_time,            0, 99);
-        chk(ui, &mut v.portamento);
-        dv(ui, &mut v.fc_volume,             0, 99);
-        chk(ui, &mut v.sustain);
-        dv(ui, &mut v.mw_pitch,             0, 99);
-        dv(ui, &mut v.mw_amplitude,         0, 99);
-        dv(ui, &mut v.bc_pitch,             0, 99);
-        dv(ui, &mut v.bc_amplitude,         0, 99);
-        dv(ui, &mut v.bc_pitch_bias,        0, 99);
-        dv(ui, &mut v.bc_eg_bias,           0, 99);
-        chk(ui, &mut v.chorus);
-        cb(ui, "transpose",  TRANSPOSE_TBL,  &mut v.transpose);
-        ui.end_row();
-    });
+    }); // end outer ui.horizontal
 }
