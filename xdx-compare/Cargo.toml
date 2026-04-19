@@ -1,0 +1,16 @@
+[package]
+name = "xdx-compare"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default      = ["real-midi"]
+real-midi    = ["xdx-midi/real-midi"]
+virtual-midi = ["xdx-midi/virtual-midi"]
+
+[dependencies]
+xdx-core  = { path = "../xdx-core" }
+xdx-midi  = { path = "../xdx-midi", default-features = false }
+xdx-synth = { path = "../xdx-synth" }
+cpal  = "0.15"
+hound = "3"

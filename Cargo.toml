@@ -5,6 +5,7 @@ members = [
     "xdx-gui",
     "xdx-e2e",
     "xdx-synth",
+    "xdx-compare",
 ]
 resolver = "2"
 
