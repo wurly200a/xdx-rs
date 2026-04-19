@@ -4,6 +4,7 @@ members = [
     "xdx-midi",
     "xdx-gui",
     "xdx-e2e",
+    "xdx-synth",
 ]
 resolver = "2"
 

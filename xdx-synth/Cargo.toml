@@ -1,0 +1,10 @@
+[package]
+name = "xdx-synth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+xdx-core = { path = "../xdx-core" }
+
+[dev-dependencies]
+hound = "3"
