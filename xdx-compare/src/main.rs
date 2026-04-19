@@ -65,38 +65,67 @@ fn main() {
     std::fs::create_dir_all(&out_dir)
         .unwrap_or_else(|e| panic!("Cannot create output dir: {e}"));
 
-    // ── 1. Render softsynth ───────────────────────────────────────────────────
-    let synth_path = format!("{out_dir}/synth.wav");
-    let synth = render_synth(&voice, midi_note, duration, release, &synth_path);
-    println!("\n[synth]  → {synth_path}");
-    print_stats("synth ", &synth);
+    // ── 1. Render softsynth (to memory) ──────────────────────────────────────
+    let (synth, synth_samples) = render_synth(&voice, midi_note, duration, release);
+    println!("\n[synth raw]  sustain_rms={:.4}  peak={:.4}  crest={:.4}",
+        synth.sustain_rms, synth.peak, synth.crest_factor);
 
     // ── 2. Record DX100 ───────────────────────────────────────────────────────
     if midi_out.is_some() && audio_in.is_some() {
-        let dx100_path = format!("{out_dir}/dx100.wav");
-        let dx100 = record_dx100(
+        let (dx100, dx100_samples, dx100_sr) = record_dx100(
             midi_note, channel, duration, release,
             midi_out.as_deref().unwrap(),
             audio_in.as_deref().unwrap(),
-            &dx100_path,
         );
-        println!("[dx100]  → {dx100_path}");
-        print_stats("dx100 ", &dx100);
 
-        println!("\n── Comparison ──────────────────────────────────────────────────");
-        let level_ratio = if synth.sustain_rms > 0.0 { dx100.sustain_rms / synth.sustain_rms } else { 0.0 };
-        let level_db    = if level_ratio > 0.0 { 20.0 * level_ratio.log10() } else { f32::NEG_INFINITY };
-        println!("  sustain level dx100/synth : {level_ratio:.4}  ({level_db:+.1} dB)");
+        // ── 3. Compute level match gain and save WAVs ─────────────────────────
+        let gain = if synth.sustain_rms > 0.0 { dx100.sustain_rms / synth.sustain_rms } else { 1.0 };
+        let gain_db = if gain > 0.0 { 20.0 * gain.log10() } else { f32::NEG_INFINITY };
+
+        let synth_path = format!("{out_dir}/synth.wav");
+        save_wav(&synth_path, &synth_samples, 44100, gain);
+        let dx100_path = format!("{out_dir}/dx100.wav");
+        save_wav(&dx100_path, &dx100_samples, dx100_sr, 1.0);
+
+        println!("[synth]  → {synth_path}  (gain {gain_db:+.1} dB applied for level match)");
+        print_stats("synth", &AudioStats {
+            rms:          synth.rms * gain,
+            peak:         synth.peak * gain,
+            sustain_rms:  synth.sustain_rms * gain,
+            crest_factor: synth.crest_factor,  // unchanged by linear gain
+        });
+        println!("[dx100]  → {dx100_path}");
+        print_stats("dx100", &dx100);
+
+        println!("\n── Comparison (after level match) ──────────────────────────────");
         let cf_diff = dx100.crest_factor - synth.crest_factor;
-        println!("  crest-factor dx100-synth  : {:+.4}  (>0 = dx100 has more harmonics)", cf_diff);
+        println!("  crest-factor dx100-synth : {:+.4}  (>0 = dx100 more harmonic than synth)", cf_diff);
         if dx100.peak < 0.01 {
             println!("  ⚠  DX100 peak={:.4} — recording level very low; check hardware volume / input gain", dx100.peak);
         }
     } else {
+        let synth_path = format!("{out_dir}/synth.wav");
+        save_wav(&synth_path, &synth_samples, 44100, 1.0);
+        println!("[synth]  → {synth_path}");
+        print_stats("synth", &synth);
         if midi_out.is_none() { println!("\n(skip DX100 recording: --midi-out not specified)"); }
         if audio_in.is_none() { println!("(skip DX100 recording: --audio-in not specified)"); }
         println!("Run with --list to see available devices.");
     }
+}
+
+fn save_wav(path: &str, samples: &[f32], sr: u32, gain: f32) {
+    let spec = hound::WavSpec {
+        channels: 1, sample_rate: sr,
+        bits_per_sample: 16, sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)
+        .unwrap_or_else(|e| panic!("Cannot create {path}: {e}"));
+    for &s in samples {
+        let v = ((s * gain).clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        writer.write_sample(v).unwrap();
+    }
+    writer.finalize().unwrap();
 }
 
 struct AudioStats {
@@ -118,12 +147,10 @@ fn render_synth(
     midi_note: u8,
     duration_s: f32,
     release_s: f32,
-    out_path: &str,
-) -> AudioStats {
+) -> (AudioStats, Vec<f32>) {
     const SR: u32 = 44100;
     let total    = ((duration_s + release_s) * SR as f32) as usize;
     let note_off = (duration_s * SR as f32) as usize;
-    // Sustain window: middle 50% of hold (skip attack and release lead-in)
     let sus_start = (duration_s * 0.25 * SR as f32) as usize;
     let sus_end   = (duration_s * 0.75 * SR as f32) as usize;
 
@@ -131,19 +158,13 @@ fn render_synth(
     engine.set_voice(voice.clone());
     engine.note_on(midi_note, 100);
 
-    let spec = hound::WavSpec {
-        channels: 1, sample_rate: SR,
-        bits_per_sample: 16, sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(out_path, spec)
-        .unwrap_or_else(|e| panic!("Cannot create {out_path}: {e}"));
-
-    let mut buf = vec![0.0f32; 512];
-    let mut pos = 0usize;
-    let mut sum_sq = 0.0f64;
-    let mut sus_sq = 0.0f64;
-    let mut sus_n  = 0usize;
-    let mut peak   = 0.0f32;
+    let mut samples = Vec::with_capacity(total);
+    let mut buf     = vec![0.0f32; 512];
+    let mut pos     = 0usize;
+    let mut sum_sq  = 0.0f64;
+    let mut sus_sq  = 0.0f64;
+    let mut sus_n   = 0usize;
+    let mut peak    = 0.0f32;
 
     while pos < total {
         let chunk = buf.len().min(total - pos);
@@ -159,17 +180,15 @@ fn render_synth(
                 sus_sq += (s as f64).powi(2);
                 sus_n  += 1;
             }
-            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            writer.write_sample(v).unwrap();
+            samples.push(s);
         }
         pos += chunk;
     }
-    writer.finalize().unwrap();
 
-    let rms         = (sum_sq / total as f64).sqrt() as f32;
-    let sustain_rms = if sus_n > 0 { (sus_sq / sus_n as f64).sqrt() as f32 } else { 0.0 };
+    let rms          = (sum_sq / total as f64).sqrt() as f32;
+    let sustain_rms  = if sus_n > 0 { (sus_sq / sus_n as f64).sqrt() as f32 } else { 0.0 };
     let crest_factor = if peak > 0.0 { sustain_rms / peak } else { 0.0 };
-    AudioStats { rms, peak, sustain_rms, crest_factor }
+    (AudioStats { rms, peak, sustain_rms, crest_factor }, samples)
 }
 
 // ── DX100 recording ───────────────────────────────────────────────────────────
@@ -181,8 +200,7 @@ fn record_dx100(
     release_s: f32,
     midi_out_name: &str,
     audio_in_name: &str,
-    out_path: &str,
-) -> AudioStats {
+) -> (AudioStats, Vec<f32>, u32) {
     const PRE_DELAY_MS: u64 = 300;
 
     // ── Open audio input ──────────────────────────────────────────────────────
@@ -267,19 +285,7 @@ fn record_dx100(
     let sustain_rms = if sus_n > 0 { (sus_sq / sus_n as f64).sqrt() as f32 } else { 0.0 };
     let crest_factor = if peak > 0.0 { sustain_rms / peak } else { 0.0 };
 
-    let spec = hound::WavSpec {
-        channels: 1, sample_rate: sr,
-        bits_per_sample: 16, sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(out_path, spec)
-        .unwrap_or_else(|e| panic!("Cannot create {out_path}: {e}"));
-    for s in &samples {
-        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        writer.write_sample(v).unwrap();
-    }
-    writer.finalize().unwrap();
-
-    AudioStats { rms, peak, sustain_rms, crest_factor }
+    (AudioStats { rms, peak, sustain_rms, crest_factor }, samples, sr)
 }
 
 // ── Device listing ────────────────────────────────────────────────────────────
