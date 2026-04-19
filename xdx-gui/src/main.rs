@@ -850,34 +850,19 @@ fn show_dx100_voice(
 ) {
     let sp = [8.0_f32, 4.0_f32];
 
-    // ── PATCHNAME + algorithm diagram ─────────────────────────────────────────
+    // ── PATCHNAME ─────────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(hdr("PATCHNAME"));
-                let resp = ui.add(
-                    egui::TextEdit::singleline(name_buf)
-                        .desired_width(88.0)
-                        .font(egui::TextStyle::Monospace)
-                );
-                if resp.changed() {
-                    name_buf.truncate(10);
-                    for (i, b) in v.name.iter_mut().enumerate() {
-                        *b = name_buf.as_bytes().get(i).copied().unwrap_or(b' ');
-                    }
-                }
-            });
-        });
-        ui.add_space(16.0);
-        if let Some(tex) = algo_textures.get(v.algorithm as usize) {
-            ui.vertical(|ui| {
-                ui.label(hdr(&format!("ALGORITHM {}", v.algorithm + 1)));
-                ui.add(
-                    egui::Image::new(tex)
-                        .max_size(egui::vec2(246.0, 100.0))
-                        .maintain_aspect_ratio(true),
-                );
-            });
+        ui.label(hdr("PATCHNAME"));
+        let resp = ui.add(
+            egui::TextEdit::singleline(name_buf)
+                .desired_width(88.0)
+                .font(egui::TextStyle::Monospace)
+        );
+        if resp.changed() {
+            name_buf.truncate(10);
+            for (i, b) in v.name.iter_mut().enumerate() {
+                *b = name_buf.as_bytes().get(i).copied().unwrap_or(b' ');
+            }
         }
     });
     ui.add_space(4.0);
@@ -929,47 +914,64 @@ fn show_dx100_voice(
 
     // ── OSCILLATOR + EG + KEY SCALING + PITCH EG ─────────────────────────────
     ui.horizontal(|ui| {
-        ui.add_space(66.0);
-        section_label(ui, "- OSCILLATOR -");
-        ui.add_space(8.0);
-        section_label(ui, "-------------- ENVELOPE GENERATOR --------------");
-        ui.add_space(20.0);
-        section_label(ui, "- OPERATOR -");
-        ui.add_space(6.0);
-        section_label(ui, "-- KEY SCALING --");
-        ui.add_space(4.0);
-        section_label(ui, "-------- PITCH ENVELOPE GENERATOR --------");
-    });
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(66.0);
+                section_label(ui, "- OSCILLATOR -");
+                ui.add_space(8.0);
+                section_label(ui, "-------------- ENVELOPE GENERATOR --------------");
+                ui.add_space(20.0);
+                section_label(ui, "- OPERATOR -");
+                ui.add_space(6.0);
+                section_label(ui, "-- KEY SCALING --");
+                ui.add_space(4.0);
+                section_label(ui, "-------- PITCH ENVELOPE GENERATOR --------");
+            });
 
-    Grid::new("operators").num_columns(17).spacing(sp).show(ui, |ui| {
-        for h in &["","RATIO","DETUNE","AR","D1R","D1L","D2R","RR",
-                   "OUT LEVEL","RATE","LEVEL","PR1","PL1","PR2","PL2","PR3","PL3"] {
-            ui.label(hdr(h));
-        }
-        ui.end_row();
+            Grid::new("operators").num_columns(17).spacing(sp).show(ui, |ui| {
+                for h in &["","RATIO","DETUNE","AR","D1R","D1L","D2R","RR",
+                           "OUT LEVEL","RATE","LEVEL","PR1","PL1","PR2","PL2","PR3","PL3"] {
+                    ui.label(hdr(h));
+                }
+                ui.end_row();
 
-        for (op_idx, label) in [(3usize,"OPERATOR4"),(2,"OPERATOR3"),(1,"OPERATOR2"),(0,"OPERATOR1")] {
-            let op = &mut v.ops[op_idx];
-            ui.label(hdr(label));
-            cb(ui, ("freq",  op_idx), freq_tbl(), &mut op.freq_ratio);
-            cb(ui, ("det",   op_idx), DETUNE_TBL, &mut op.detune);
-            dv(ui, &mut op.ar,           0, 31);
-            dv(ui, &mut op.d1r,          0, 31);
-            dv(ui, &mut op.d1l,          0, 15);
-            dv(ui, &mut op.d2r,          0, 31);
-            dv(ui, &mut op.rr,           0, 15);
-            dv(ui, &mut op.out_level,    0, 99);
-            dv(ui, &mut op.kbd_rate_scl, 0,  3);
-            dv(ui, &mut op.kbd_lev_scl,  0, 99);
-            if op_idx == 0 {
-                dv(ui, &mut v.pitch_eg_rate[0],  0, 99);
-                dv(ui, &mut v.pitch_eg_level[0], 0, 99);
-                dv(ui, &mut v.pitch_eg_rate[1],  0, 99);
-                dv(ui, &mut v.pitch_eg_level[1], 0, 99);
-                dv(ui, &mut v.pitch_eg_rate[2],  0, 99);
-                dv(ui, &mut v.pitch_eg_level[2], 0, 99);
-            }
-            ui.end_row();
+                for (op_idx, label) in [(3usize,"OPERATOR4"),(2,"OPERATOR3"),(1,"OPERATOR2"),(0,"OPERATOR1")] {
+                    let op = &mut v.ops[op_idx];
+                    ui.label(hdr(label));
+                    cb(ui, ("freq",  op_idx), freq_tbl(), &mut op.freq_ratio);
+                    cb(ui, ("det",   op_idx), DETUNE_TBL, &mut op.detune);
+                    dv(ui, &mut op.ar,           0, 31);
+                    dv(ui, &mut op.d1r,          0, 31);
+                    dv(ui, &mut op.d1l,          0, 15);
+                    dv(ui, &mut op.d2r,          0, 31);
+                    dv(ui, &mut op.rr,           0, 15);
+                    dv(ui, &mut op.out_level,    0, 99);
+                    dv(ui, &mut op.kbd_rate_scl, 0,  3);
+                    dv(ui, &mut op.kbd_lev_scl,  0, 99);
+                    if op_idx == 0 {
+                        dv(ui, &mut v.pitch_eg_rate[0],  0, 99);
+                        dv(ui, &mut v.pitch_eg_level[0], 0, 99);
+                        dv(ui, &mut v.pitch_eg_rate[1],  0, 99);
+                        dv(ui, &mut v.pitch_eg_level[1], 0, 99);
+                        dv(ui, &mut v.pitch_eg_rate[2],  0, 99);
+                        dv(ui, &mut v.pitch_eg_level[2], 0, 99);
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+
+        // ── Algorithm diagram (right of operator rows) ────────────────────────
+        if let Some(tex) = algo_textures.get(v.algorithm as usize) {
+            ui.add_space(12.0);
+            ui.vertical(|ui| {
+                ui.label(hdr(&format!("ALGORITHM {}", v.algorithm + 1)));
+                ui.add(
+                    egui::Image::new(tex)
+                        .max_size(egui::vec2(246.0, 151.0))
+                        .maintain_aspect_ratio(true),
+                );
+            });
         }
     });
 
