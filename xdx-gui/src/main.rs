@@ -160,6 +160,8 @@ struct App {
     bank_file_path: Option<PathBuf>,
     status:     String,
     algo_textures: Vec<egui::TextureHandle>,
+    pc_kbd_notes: std::collections::HashSet<u8>,
+    voice_dirty:  bool,   // true → push voice to audio engine on next frame
 }
 
 impl App {
@@ -193,6 +195,8 @@ impl App {
             bank_file_path:  None,
             status: "Test data loaded".to_string(),
             algo_textures,
+            pc_kbd_notes: std::collections::HashSet::new(),
+            voice_dirty:  true,   // push initial voice on first frame
         };
         app.start_port_scan(); // scan in background at startup
         app
@@ -228,6 +232,7 @@ impl App {
                 Ok(voice) => {
                     self.name_buf = voice.name_str();
                     self.voice = voice;
+                    self.voice_dirty = true;
                     self.status = format!("Opened: {}", path.display());
                     self.file_path = Some(path);
                 }
@@ -373,6 +378,7 @@ impl eframe::App for App {
                                 let name = voice.name_str();
                                 self.name_buf = name.clone();
                                 self.voice = voice;
+                                self.voice_dirty = true;
                                 self.status = format!("Fetch 1: received \"{name}\" from synth");
                             }
                             Err(e) => {
@@ -441,9 +447,12 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
-        // ── Software synth: push current voice ───────────────────────────────────
-        if let Some(ref audio) = self.audio {
-            audio.set_voice(self.voice.clone());
+        // ── Software synth: push voice only when changed ─────────────────────────
+        if self.voice_dirty {
+            if let Some(ref audio) = self.audio {
+                audio.set_voice(self.voice.clone());
+            }
+            self.voice_dirty = false;
         }
 
         // ── PC keyboard → Softsynth + MIDI OUT ───────────────────────────────────
@@ -452,10 +461,13 @@ impl eframe::App for App {
             let mut released = Vec::new();
             ctx.input(|i| {
                 for &(key, note) in PIANO_KEYS {
-                    if i.key_pressed(key)  { pressed.push(note); }
-                    if i.key_released(key) { released.push(note); }
+                    let down = i.key_down(key);
+                    if  down && !self.pc_kbd_notes.contains(&note) { pressed.push(note); }
+                    if !down &&  self.pc_kbd_notes.contains(&note) { released.push(note); }
                 }
             });
+            for &n in &pressed  { self.pc_kbd_notes.insert(n); }
+            for &n in &released { self.pc_kbd_notes.remove(&n); }
             for note in pressed {
                 if let Some(ref a) = self.audio { a.note_on(note, 100); }
                 if self.midi_manager.out_connected() {
@@ -747,6 +759,7 @@ impl eframe::App for App {
                     {
                         if let Some(v) = self.bank.get(self.bank_sel) {
                             self.voice   = v.clone();
+                            self.voice_dirty = true;
                             self.name_buf = self.voice.name_str();
                             self.status  = format!(
                                 "Loaded {:02}: {}", self.bank_sel + 1, self.voice.name_str()
@@ -834,7 +847,9 @@ impl eframe::App for App {
             ui.separator();
 
             egui::ScrollArea::both().show(ui, |ui| {
+                let before = self.voice.clone();
                 show_dx100_voice(ui, &mut self.voice, &mut self.name_buf, &self.algo_textures);
+                if self.voice != before { self.voice_dirty = true; }
             });
         });
     }

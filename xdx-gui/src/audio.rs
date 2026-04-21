@@ -1,11 +1,17 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 use xdx_core::dx100::Dx100Voice;
 use xdx_synth::FmEngine;
 
+enum AudioCmd {
+    NoteOn(u8, u8),
+    NoteOff(u8),
+    SetVoice(Box<Dx100Voice>),
+}
+
 pub struct AudioHandle {
-    engine:  Arc<Mutex<FmEngine>>,
-    _stream: cpal::Stream,
+    tx:             mpsc::Sender<AudioCmd>,
+    _stream:        cpal::Stream,
     pub sample_rate: f32,
 }
 
@@ -20,10 +26,9 @@ impl AudioHandle {
         let sr       = sup.sample_rate().0 as f32;
         let channels = sup.channels() as usize;
 
-        let engine    = Arc::new(Mutex::new(FmEngine::new(sr)));
-        let engine_cb = engine.clone();
+        let (tx, rx) = mpsc::channel::<AudioCmd>();
+        let mut engine = FmEngine::new(sr);
 
-        // Request F32 samples; WASAPI / CoreAudio / ALSA all support this.
         let config = cpal::StreamConfig {
             channels:    sup.channels(),
             sample_rate: sup.sample_rate(),
@@ -34,11 +39,18 @@ impl AudioHandle {
             .build_output_stream::<f32, _, _>(
                 &config,
                 move |data: &mut [f32], _| {
+                    // Apply all pending GUI commands before rendering.
+                    // try_recv() is non-blocking — no mutex, no stall.
+                    while let Ok(cmd) = rx.try_recv() {
+                        match cmd {
+                            AudioCmd::NoteOn(note, vel) => engine.note_on(note, vel),
+                            AudioCmd::NoteOff(note)     => engine.note_off(note),
+                            AudioCmd::SetVoice(voice)   => engine.set_voice(*voice),
+                        }
+                    }
                     let n_frames = data.len() / channels;
                     let mut mono = vec![0.0f32; n_frames];
-                    if let Ok(mut eng) = engine_cb.try_lock() {
-                        eng.render(&mut mono);
-                    }
+                    engine.render(&mut mono);
                     for (frame, &s) in data.chunks_mut(channels).zip(mono.iter()) {
                         frame.fill(s);
                     }
@@ -50,24 +62,18 @@ impl AudioHandle {
 
         stream.play().map_err(|e| e.to_string())?;
 
-        Ok(Self { engine, _stream: stream, sample_rate: sr })
+        Ok(Self { tx, _stream: stream, sample_rate: sr })
     }
 
     pub fn note_on(&self, note: u8, velocity: u8) {
-        if let Ok(mut eng) = self.engine.lock() {
-            eng.note_on(note, velocity);
-        }
+        let _ = self.tx.send(AudioCmd::NoteOn(note, velocity));
     }
 
     pub fn note_off(&self, note: u8) {
-        if let Ok(mut eng) = self.engine.lock() {
-            eng.note_off(note);
-        }
+        let _ = self.tx.send(AudioCmd::NoteOff(note));
     }
 
     pub fn set_voice(&self, voice: Dx100Voice) {
-        if let Ok(mut eng) = self.engine.lock() {
-            eng.set_voice(voice);
-        }
+        let _ = self.tx.send(AudioCmd::SetVoice(Box::new(voice)));
     }
 }
