@@ -8,22 +8,35 @@ fn main() {
     let bytes = std::fs::read("testdata/syx/IvoryEbony.syx").expect("read IvoryEbony.syx");
     let voice = dx100_decode_1voice(&bytes).expect("decode");
     println!("=== IvoryEbony parameters ===");
-    println!("Algorithm={} Feedback={}", voice.algorithm + 1, voice.feedback);
+    println!(
+        "Algorithm={} Feedback={}",
+        voice.algorithm + 1,
+        voice.feedback
+    );
     for (i, op) in voice.ops.iter().enumerate() {
         println!(
             "  OP{}: AR={:2} D1R={:2} D2R={:2} RR={:2} D1L={:2}  Level={:2}  Ratio={}  Det={}",
-            i + 1, op.ar, op.d1r, op.d2r, op.rr, op.d1l,
-            op.out_level, op.freq_ratio, op.detune
+            i + 1,
+            op.ar,
+            op.d1r,
+            op.d2r,
+            op.rr,
+            op.d1l,
+            op.out_level,
+            op.freq_ratio,
+            op.detune
         );
     }
     println!();
 
     // ── Load WAV ─────────────────────────────────────────────────────────────
-    let wav_path = std::env::args().nth(1)
+    let wav_path = std::env::args()
+        .nth(1)
         .unwrap_or_else(|| "out/ivory_analyze/synth.wav".to_string());
     let mut reader = hound::WavReader::open(&wav_path).expect("open wav");
     let sr = reader.spec().sample_rate as f32;
-    let samples: Vec<f32> = reader.samples::<i16>()
+    let samples: Vec<f32> = reader
+        .samples::<i16>()
         .map(|s| s.unwrap() as f32 / i16::MAX as f32)
         .collect();
 
@@ -31,21 +44,33 @@ fn main() {
     let mut max_jump = 0.0f32;
     let mut max_jump_sample = 0usize;
     for i in 1..samples.len() {
-        let j = (samples[i] - samples[i-1]).abs();
-        if j > max_jump { max_jump = j; max_jump_sample = i; }
+        let j = (samples[i] - samples[i - 1]).abs();
+        if j > max_jump {
+            max_jump = j;
+            max_jump_sample = i;
+        }
     }
     println!("=== Largest sample jump ===");
-    println!("  jump={:.5}  at sample {}  ({:.2}ms)",
-        max_jump, max_jump_sample, max_jump_sample as f32 / sr * 1000.0);
+    println!(
+        "  jump={:.5}  at sample {}  ({:.2}ms)",
+        max_jump,
+        max_jump_sample,
+        max_jump_sample as f32 / sr * 1000.0
+    );
 
     // ── 2. Find top-10 largest jumps ─────────────────────────────────────────
     let mut jumps: Vec<(f32, usize)> = (1..samples.len())
-        .map(|i| ((samples[i] - samples[i-1]).abs(), i))
+        .map(|i| ((samples[i] - samples[i - 1]).abs(), i))
         .collect();
     jumps.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
     println!("\n=== Top 10 sample jumps ===");
     for (j, idx) in jumps.iter().take(10) {
-        println!("  {:.5}  at {:.2}ms  (sample {})", j, *idx as f32 / sr * 1000.0, idx);
+        println!(
+            "  {:.5}  at {:.2}ms  (sample {})",
+            j,
+            *idx as f32 / sr * 1000.0,
+            idx
+        );
     }
 
     // ── 3. 1ms-window RMS for first 1500ms ───────────────────────────────────

@@ -9,12 +9,24 @@ use xdx_core::sysex::dx100_encode_1voice;
 
 fn fb_test_voice(feedback: u8) -> Dx100Voice {
     let silent_op = Dx100Operator {
-        ar: 31, d1r: 0, d2r: 0, rr: 7, d1l: 0,
-        out_level: 0, freq_ratio: 4, detune: 3,
-        kbd_lev_scl: 0, kbd_rate_scl: 0,
-        eg_bias_sens: 0, amp_mod_en: 0, key_vel_sens: 0,
+        ar: 31,
+        d1r: 0,
+        d2r: 0,
+        rr: 7,
+        d1l: 0,
+        out_level: 0,
+        freq_ratio: 4,
+        detune: 3,
+        kbd_lev_scl: 0,
+        kbd_rate_scl: 0,
+        eg_bias_sens: 0,
+        amp_mod_en: 0,
+        key_vel_sens: 0,
     };
-    let carrier_op = Dx100Operator { out_level: 90, ..silent_op };
+    let carrier_op = Dx100Operator {
+        out_level: 90,
+        ..silent_op
+    };
 
     let name_str = format!("FB TEST {:>3}", feedback);
     let mut name = [b' '; 10];

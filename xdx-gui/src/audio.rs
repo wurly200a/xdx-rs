@@ -10,27 +10,27 @@ enum AudioCmd {
 }
 
 pub struct AudioHandle {
-    tx:             mpsc::Sender<AudioCmd>,
-    _stream:        cpal::Stream,
+    tx: mpsc::Sender<AudioCmd>,
+    _stream: cpal::Stream,
     pub sample_rate: f32,
 }
 
 impl AudioHandle {
     pub fn start() -> Result<Self, String> {
-        let host   = cpal::default_host();
-        let device = host.default_output_device()
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
             .ok_or("no default audio output device")?;
-        let sup    = device.default_output_config()
-            .map_err(|e| e.to_string())?;
+        let sup = device.default_output_config().map_err(|e| e.to_string())?;
 
-        let sr       = sup.sample_rate().0 as f32;
+        let sr = sup.sample_rate().0 as f32;
         let channels = sup.channels() as usize;
 
         let (tx, rx) = mpsc::channel::<AudioCmd>();
         let mut engine = FmEngine::new(sr);
 
         let config = cpal::StreamConfig {
-            channels:    sup.channels(),
+            channels: sup.channels(),
             sample_rate: sup.sample_rate(),
             buffer_size: cpal::BufferSize::Default,
         };
@@ -44,8 +44,8 @@ impl AudioHandle {
                     while let Ok(cmd) = rx.try_recv() {
                         match cmd {
                             AudioCmd::NoteOn(note, vel) => engine.note_on(note, vel),
-                            AudioCmd::NoteOff(note)     => engine.note_off(note),
-                            AudioCmd::SetVoice(voice)   => engine.set_voice(*voice),
+                            AudioCmd::NoteOff(note) => engine.note_off(note),
+                            AudioCmd::SetVoice(voice) => engine.set_voice(*voice),
                         }
                     }
                     let n_frames = data.len() / channels;
@@ -62,7 +62,11 @@ impl AudioHandle {
 
         stream.play().map_err(|e| e.to_string())?;
 
-        Ok(Self { tx, _stream: stream, sample_rate: sr })
+        Ok(Self {
+            tx,
+            _stream: stream,
+            sample_rate: sr,
+        })
     }
 
     pub fn note_on(&self, note: u8, velocity: u8) {
