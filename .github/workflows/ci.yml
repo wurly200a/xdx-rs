@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt / clippy / test
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # ── Format ────────────────────────────────────────────────────────────────
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      # ── Lint (exclude GUI which needs a display device) ───────────────────────
+      - name: cargo clippy (core + synth)
+        run: cargo clippy -p xdx-core -p xdx-synth -- -D warnings
+
+      # ── Tests ─────────────────────────────────────────────────────────────────
+      - name: cargo test xdx-core
+        run: cargo test -p xdx-core --lib

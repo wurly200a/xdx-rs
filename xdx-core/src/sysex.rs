@@ -1,5 +1,5 @@
-use crate::dx7::Dx7Voice;
 use crate::dx100::{Dx100Operator, Dx100Voice};
+use crate::dx7::Dx7Voice;
 
 #[derive(Debug, PartialEq)]
 pub enum SysExError {
@@ -54,7 +54,7 @@ pub enum SysExError {
 //   [+11] freq_ratio, [+12] detune
 
 const DX100_1VOICE_PAYLOAD_LEN: u16 = 93; // 0x5D
-const DX100_1VOICE_TOTAL_LEN:   usize = 101;
+const DX100_1VOICE_TOTAL_LEN: usize = 101;
 
 pub fn dx100_decode_1voice(data: &[u8]) -> Result<Dx100Voice, SysExError> {
     if data.len() < DX100_1VOICE_TOTAL_LEN {
@@ -81,10 +81,7 @@ pub fn dx100_decode_1voice(data: &[u8]) -> Result<Dx100Voice, SysExError> {
 pub fn dx100_encode_1voice(voice: &Dx100Voice, channel: u8) -> Vec<u8> {
     let payload = build_dx100_1voice(voice);
     let checksum = calc_checksum(&payload);
-    let mut out = vec![
-        0xF0, 0x43, 0x00 | (channel & 0x0F), 0x03,
-        0x00, 0x5D,
-    ];
+    let mut out = vec![0xF0, 0x43, channel & 0x0F, 0x03, 0x00, 0x5D];
     out.extend_from_slice(&payload);
     out.push(checksum);
     out.push(0xF7);
@@ -140,8 +137,8 @@ pub fn dx100_encode_1voice(voice: &Dx100Voice, channel: u8) -> Vec<u8> {
 //   [73-127] dummy/reserved (zeros)
 
 const DX100_32VOICE_PAYLOAD_LEN: u16 = 4096; // 0x2000
-const DX100_32VOICE_TOTAL_LEN:   usize = 4104;
-const DX100_VMEM_SIZE:           usize = 128;
+const DX100_32VOICE_TOTAL_LEN: usize = 4104;
+const DX100_VMEM_SIZE: usize = 128;
 
 pub fn dx100_decode_32voice(data: &[u8]) -> Result<Vec<Dx100Voice>, SysExError> {
     if data.len() < DX100_32VOICE_TOTAL_LEN {
@@ -176,10 +173,7 @@ pub fn dx100_encode_32voice(voices: &[Dx100Voice], channel: u8) -> Vec<u8> {
         payload.extend_from_slice(&vmem);
     }
     let checksum = calc_checksum(&payload);
-    let mut out = vec![
-        0xF0, 0x43, 0x00 | (channel & 0x0F), 0x04,
-        0x20, 0x00,
-    ];
+    let mut out = vec![0xF0, 0x43, channel & 0x0F, 0x04, 0x20, 0x00];
     out.extend_from_slice(&payload);
     out.push(checksum);
     out.push(0xF7);
@@ -188,49 +182,49 @@ pub fn dx100_encode_32voice(voices: &[Dx100Voice], channel: u8) -> Vec<u8> {
 
 fn vmem_to_voice(v: &[u8]) -> Dx100Voice {
     let op = |base: usize| Dx100Operator {
-        ar:           v[base],
-        d1r:          v[base + 1],
-        d2r:          v[base + 2],
-        rr:           v[base + 3],
-        d1l:          v[base + 4],
-        kbd_lev_scl:  v[base + 5],
-        amp_mod_en:   (v[base + 6] >> 6) & 0x1,
+        ar: v[base],
+        d1r: v[base + 1],
+        d2r: v[base + 2],
+        rr: v[base + 3],
+        d1l: v[base + 4],
+        kbd_lev_scl: v[base + 5],
+        amp_mod_en: (v[base + 6] >> 6) & 0x1,
         eg_bias_sens: (v[base + 6] >> 3) & 0x7,
-        key_vel_sens:  v[base + 6]        & 0x7,
-        out_level:     v[base + 7],
-        freq_ratio:    v[base + 8],
+        key_vel_sens: v[base + 6] & 0x7,
+        out_level: v[base + 7],
+        freq_ratio: v[base + 8],
         kbd_rate_scl: (v[base + 9] >> 3) & 0x1F,
-        detune:        v[base + 9]        & 0x7,
+        detune: v[base + 9] & 0x7,
     };
     Dx100Voice {
         ops: [op(30), op(10), op(20), op(0)], // [OP1, OP2, OP3, OP4]
-        algorithm:      v[40] & 0x7,
-        feedback:      (v[40] >> 3) & 0x7,
-        lfo_sync:      (v[40] >> 6) & 0x3,
-        lfo_speed:      v[41],
-        lfo_delay:      v[42],
-        lfo_pmd:        v[43],
-        lfo_amd:        v[44],
-        lfo_wave:       v[45] & 0x3,
-        amp_mod_sens:  (v[45] >> 2) & 0x3,
-        pitch_mod_sens:(v[45] >> 4) & 0x7,
-        transpose:      v[46],
-        pb_range:       v[47],
-        porta_mode:     v[48] & 0x1,
-        portamento:    (v[48] >> 1) & 0x1,
-        sustain:       (v[48] >> 2) & 0x1,
-        poly_mono:     (v[48] >> 3) & 0x1,
-        chorus:        (v[48] >> 4) & 0x1,
-        porta_time:     v[49],
-        fc_volume:      v[50],
-        mw_pitch:       v[51],
-        mw_amplitude:   v[52],
-        bc_pitch:       v[53],
-        bc_amplitude:   v[54],
-        bc_pitch_bias:  v[55],
-        bc_eg_bias:     v[56],
-        name:           v[57..67].try_into().unwrap(),
-        pitch_eg_rate:  [v[67], v[68], v[69]],
+        algorithm: v[40] & 0x7,
+        feedback: (v[40] >> 3) & 0x7,
+        lfo_sync: (v[40] >> 6) & 0x3,
+        lfo_speed: v[41],
+        lfo_delay: v[42],
+        lfo_pmd: v[43],
+        lfo_amd: v[44],
+        lfo_wave: v[45] & 0x3,
+        amp_mod_sens: (v[45] >> 2) & 0x3,
+        pitch_mod_sens: (v[45] >> 4) & 0x7,
+        transpose: v[46],
+        pb_range: v[47],
+        porta_mode: v[48] & 0x1,
+        portamento: (v[48] >> 1) & 0x1,
+        sustain: (v[48] >> 2) & 0x1,
+        poly_mono: (v[48] >> 3) & 0x1,
+        chorus: (v[48] >> 4) & 0x1,
+        porta_time: v[49],
+        fc_volume: v[50],
+        mw_pitch: v[51],
+        mw_amplitude: v[52],
+        bc_pitch: v[53],
+        bc_amplitude: v[54],
+        bc_pitch_bias: v[55],
+        bc_eg_bias: v[56],
+        name: v[57..67].try_into().unwrap(),
+        pitch_eg_rate: [v[67], v[68], v[69]],
         pitch_eg_level: [v[70], v[71], v[72]],
     }
 }
@@ -240,37 +234,31 @@ fn voice_to_vmem(v: &Dx100Voice) -> [u8; DX100_VMEM_SIZE] {
     // op_base: (vmem_offset, ops_index)  order: OP4=ops[3], OP2=ops[1], OP3=ops[2], OP1=ops[0]
     for (base, idx) in [(0, 3), (10, 1), (20, 2), (30, 0)] {
         let op = &v.ops[idx];
-        m[base]     = op.ar;
+        m[base] = op.ar;
         m[base + 1] = op.d1r;
         m[base + 2] = op.d2r;
         m[base + 3] = op.rr;
         m[base + 4] = op.d1l;
         m[base + 5] = op.kbd_lev_scl;
-        m[base + 6] = ((op.amp_mod_en   & 0x1) << 6)
-                    | ((op.eg_bias_sens  & 0x7) << 3)
-                    |  (op.key_vel_sens  & 0x7);
+        m[base + 6] =
+            ((op.amp_mod_en & 0x1) << 6) | ((op.eg_bias_sens & 0x7) << 3) | (op.key_vel_sens & 0x7);
         m[base + 7] = op.out_level;
         m[base + 8] = op.freq_ratio;
-        m[base + 9] = ((op.kbd_rate_scl & 0x1F) << 3)
-                    |  (op.detune        & 0x7);
+        m[base + 9] = ((op.kbd_rate_scl & 0x1F) << 3) | (op.detune & 0x7);
     }
-    m[40] = ((v.lfo_sync  & 0x3) << 6)
-          | ((v.feedback  & 0x7) << 3)
-          |  (v.algorithm & 0x7);
+    m[40] = ((v.lfo_sync & 0x3) << 6) | ((v.feedback & 0x7) << 3) | (v.algorithm & 0x7);
     m[41] = v.lfo_speed;
     m[42] = v.lfo_delay;
     m[43] = v.lfo_pmd;
     m[44] = v.lfo_amd;
-    m[45] = ((v.pitch_mod_sens & 0x7) << 4)
-          | ((v.amp_mod_sens   & 0x3) << 2)
-          |  (v.lfo_wave       & 0x3);
+    m[45] = ((v.pitch_mod_sens & 0x7) << 4) | ((v.amp_mod_sens & 0x3) << 2) | (v.lfo_wave & 0x3);
     m[46] = v.transpose;
     m[47] = v.pb_range;
-    m[48] = ((v.chorus     & 0x1) << 4)
-          | ((v.poly_mono  & 0x1) << 3)
-          | ((v.sustain    & 0x1) << 2)
-          | ((v.portamento & 0x1) << 1)
-          |  (v.porta_mode & 0x1);
+    m[48] = ((v.chorus & 0x1) << 4)
+        | ((v.poly_mono & 0x1) << 3)
+        | ((v.sustain & 0x1) << 2)
+        | ((v.portamento & 0x1) << 1)
+        | (v.porta_mode & 0x1);
     m[49] = v.porta_time;
     m[50] = v.fc_volume;
     m[51] = v.mw_pitch;
@@ -314,19 +302,19 @@ fn verify_checksum(data: &[u8], expected: u8) -> Result<(), SysExError> {
 
 fn parse_op(b: &[u8]) -> Dx100Operator {
     Dx100Operator {
-        ar:           b[0],
-        d1r:          b[1],
-        d2r:          b[2],
-        rr:           b[3],
-        d1l:          b[4],
-        kbd_lev_scl:  b[5],
+        ar: b[0],
+        d1r: b[1],
+        d2r: b[2],
+        rr: b[3],
+        d1l: b[4],
+        kbd_lev_scl: b[5],
         kbd_rate_scl: b[6],
         eg_bias_sens: b[7],
-        amp_mod_en:   b[8],
+        amp_mod_en: b[8],
         key_vel_sens: b[9],
-        out_level:    b[10],
-        freq_ratio:   b[11],
-        detune:       b[12],
+        out_level: b[10],
+        freq_ratio: b[11],
+        detune: b[12],
     }
 }
 
@@ -339,44 +327,53 @@ fn parse_dx100_1voice(p: &[u8]) -> Dx100Voice {
     let op1 = parse_op(&p[39..]);
 
     Dx100Voice {
-        ops:            [op1, op2, op3, op4],
-        algorithm:      p[52],
-        feedback:       p[53],
-        lfo_speed:      p[54],
-        lfo_delay:      p[55],
-        lfo_pmd:        p[56],
-        lfo_amd:        p[57],
-        lfo_sync:       p[58],
-        lfo_wave:       p[59],
+        ops: [op1, op2, op3, op4],
+        algorithm: p[52],
+        feedback: p[53],
+        lfo_speed: p[54],
+        lfo_delay: p[55],
+        lfo_pmd: p[56],
+        lfo_amd: p[57],
+        lfo_sync: p[58],
+        lfo_wave: p[59],
         pitch_mod_sens: p[60],
-        amp_mod_sens:   p[61],
-        transpose:      p[62],
-        poly_mono:      p[63],
-        pb_range:       p[64],
-        porta_mode:     p[65],
-        porta_time:     p[66],
-        fc_volume:      p[67],
-        sustain:        p[68],
-        portamento:     p[69],
-        chorus:         p[70],
-        mw_pitch:       p[71],
-        mw_amplitude:   p[72],
-        bc_pitch:       p[73],
-        bc_amplitude:   p[74],
-        bc_pitch_bias:  p[75],
-        bc_eg_bias:     p[76],
-        name:           p[77..87].try_into().unwrap(),
-        pitch_eg_rate:  [p[87], p[88], p[89]],
+        amp_mod_sens: p[61],
+        transpose: p[62],
+        poly_mono: p[63],
+        pb_range: p[64],
+        porta_mode: p[65],
+        porta_time: p[66],
+        fc_volume: p[67],
+        sustain: p[68],
+        portamento: p[69],
+        chorus: p[70],
+        mw_pitch: p[71],
+        mw_amplitude: p[72],
+        bc_pitch: p[73],
+        bc_amplitude: p[74],
+        bc_pitch_bias: p[75],
+        bc_eg_bias: p[76],
+        name: p[77..87].try_into().unwrap(),
+        pitch_eg_rate: [p[87], p[88], p[89]],
         pitch_eg_level: [p[90], p[91], p[92]],
     }
 }
 
 fn build_op(op: &Dx100Operator) -> [u8; 13] {
     [
-        op.ar, op.d1r, op.d2r, op.rr, op.d1l,
-        op.kbd_lev_scl, op.kbd_rate_scl, op.eg_bias_sens,
-        op.amp_mod_en, op.key_vel_sens, op.out_level,
-        op.freq_ratio, op.detune,
+        op.ar,
+        op.d1r,
+        op.d2r,
+        op.rr,
+        op.d1l,
+        op.kbd_lev_scl,
+        op.kbd_rate_scl,
+        op.eg_bias_sens,
+        op.amp_mod_en,
+        op.key_vel_sens,
+        op.out_level,
+        op.freq_ratio,
+        op.detune,
     ]
 }
 
@@ -388,18 +385,138 @@ fn build_dx100_1voice(v: &Dx100Voice) -> Vec<u8> {
     p.extend_from_slice(&build_op(&v.ops[2])); // OP3
     p.extend_from_slice(&build_op(&v.ops[0])); // OP1
     p.extend_from_slice(&[
-        v.algorithm, v.feedback,
-        v.lfo_speed, v.lfo_delay, v.lfo_pmd, v.lfo_amd,
-        v.lfo_sync, v.lfo_wave,
-        v.pitch_mod_sens, v.amp_mod_sens,
-        v.transpose, v.poly_mono, v.pb_range,
-        v.porta_mode, v.porta_time,
-        v.fc_volume, v.sustain, v.portamento, v.chorus,
-        v.mw_pitch, v.mw_amplitude,
-        v.bc_pitch, v.bc_amplitude, v.bc_pitch_bias, v.bc_eg_bias,
+        v.algorithm,
+        v.feedback,
+        v.lfo_speed,
+        v.lfo_delay,
+        v.lfo_pmd,
+        v.lfo_amd,
+        v.lfo_sync,
+        v.lfo_wave,
+        v.pitch_mod_sens,
+        v.amp_mod_sens,
+        v.transpose,
+        v.poly_mono,
+        v.pb_range,
+        v.porta_mode,
+        v.porta_time,
+        v.fc_volume,
+        v.sustain,
+        v.portamento,
+        v.chorus,
+        v.mw_pitch,
+        v.mw_amplitude,
+        v.bc_pitch,
+        v.bc_amplitude,
+        v.bc_pitch_bias,
+        v.bc_eg_bias,
     ]);
     p.extend_from_slice(&v.name);
     p.extend_from_slice(&v.pitch_eg_rate);
     p.extend_from_slice(&v.pitch_eg_level);
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dx100::{Dx100Operator, Dx100Voice};
+
+    fn dummy_op(seed: u8) -> Dx100Operator {
+        Dx100Operator {
+            ar: seed % 32,
+            d1r: (seed + 1) % 32,
+            d2r: (seed + 2) % 32,
+            rr: seed % 16,
+            d1l: seed % 16,
+            kbd_lev_scl: seed % 100,
+            kbd_rate_scl: seed % 4,
+            eg_bias_sens: seed % 8,
+            amp_mod_en: seed % 2,
+            key_vel_sens: seed % 8,
+            out_level: seed % 100,
+            freq_ratio: seed % 64,
+            detune: seed % 7,
+        }
+    }
+
+    fn dummy_voice() -> Dx100Voice {
+        Dx100Voice {
+            ops: [dummy_op(10), dummy_op(20), dummy_op(30), dummy_op(40)],
+            algorithm: 3,
+            feedback: 5,
+            lfo_speed: 50,
+            lfo_delay: 10,
+            lfo_pmd: 20,
+            lfo_amd: 30,
+            lfo_sync: 1,
+            lfo_wave: 2,
+            pitch_mod_sens: 4,
+            amp_mod_sens: 2,
+            transpose: 24,
+            poly_mono: 0,
+            pb_range: 2,
+            porta_mode: 0,
+            porta_time: 0,
+            fc_volume: 99,
+            sustain: 0,
+            portamento: 0,
+            chorus: 0,
+            mw_pitch: 0,
+            mw_amplitude: 0,
+            bc_pitch: 0,
+            bc_amplitude: 0,
+            bc_pitch_bias: 0,
+            bc_eg_bias: 0,
+            name: *b"TESTVOICE ",
+            pitch_eg_rate: [50, 50, 50],
+            pitch_eg_level: [50, 50, 50],
+        }
+    }
+
+    #[test]
+    fn roundtrip_1voice() {
+        let original = dummy_voice();
+        let syx = dx100_encode_1voice(&original, 0);
+        assert_eq!(syx.len(), 101);
+        assert_eq!(syx[0], 0xF0);
+        assert_eq!(syx[100], 0xF7);
+        let decoded = dx100_decode_1voice(&syx).expect("decode failed");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn roundtrip_32voice() {
+        let voices: Vec<Dx100Voice> = (0..32)
+            .map(|i| {
+                let mut v = dummy_voice();
+                v.ops[0].out_level = i as u8 % 100;
+                v.algorithm = i as u8 % 8;
+                v
+            })
+            .collect();
+        let syx = dx100_encode_32voice(&voices, 0);
+        assert_eq!(syx.len(), 4104);
+        let decoded = dx100_decode_32voice(&syx).expect("decode failed");
+        assert_eq!(decoded.len(), 32);
+        for (i, (orig, dec)) in voices.iter().zip(decoded.iter()).enumerate() {
+            assert_eq!(dec, orig, "voice {i} mismatch");
+        }
+    }
+
+    #[test]
+    fn checksum_mismatch_is_detected() {
+        let mut syx = dx100_encode_1voice(&dummy_voice(), 0);
+        syx[99] ^= 0x01; // corrupt checksum byte
+        assert!(matches!(
+            dx100_decode_1voice(&syx),
+            Err(SysExError::ChecksumMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn too_short_is_detected() {
+        let syx = &[0xF0u8, 0x43, 0x00, 0x03];
+        assert_eq!(dx100_decode_1voice(syx), Err(SysExError::TooShort));
+    }
 }
