@@ -12,7 +12,6 @@ enum AudioCmd {
 pub struct AudioHandle {
     tx: mpsc::Sender<AudioCmd>,
     _stream: cpal::Stream,
-    pub sample_rate: f32,
 }
 
 impl AudioHandle {
@@ -65,7 +64,6 @@ impl AudioHandle {
         Ok(Self {
             tx,
             _stream: stream,
-            sample_rate: sr,
         })
     }
 
