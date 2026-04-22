@@ -41,7 +41,7 @@ fn decode_ivory_ebony_op4_out_level() {
 #[test]
 fn decode_ivory_ebony_pitch_eg() {
     let voice = dx100_decode_1voice(IVORY_EBONY_SYX).unwrap();
-    assert_eq!(voice.pitch_eg_rate,  [99, 99, 99]);
+    assert_eq!(voice.pitch_eg_rate, [99, 99, 99]);
     assert_eq!(voice.pitch_eg_level, [50, 50, 50]);
 }
 

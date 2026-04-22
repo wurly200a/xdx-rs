@@ -18,19 +18,17 @@ fn main() {
     };
 
     let out_path = args.get(2).map(|s| s.as_str()).unwrap_or("out.wav");
-    let midi_note: u8 = args.get(3)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(69); // A4 = 440 Hz
+    let midi_note: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(69); // A4 = 440 Hz
 
     dump_voice(&voice, midi_note);
     println!("Writing to: {out_path}");
 
     const SAMPLE_RATE: u32 = 44100;
-    const NOTE_DUR_S:  f32 = 2.0;
-    const RELEASE_S:   f32 = 1.0;
+    const NOTE_DUR_S: f32 = 2.0;
+    const RELEASE_S: f32 = 1.0;
 
     let total_samples = ((NOTE_DUR_S + RELEASE_S) * SAMPLE_RATE as f32) as usize;
-    let note_off_at   = (NOTE_DUR_S * SAMPLE_RATE as f32) as usize;
+    let note_off_at = (NOTE_DUR_S * SAMPLE_RATE as f32) as usize;
 
     let mut engine = FmEngine::new(SAMPLE_RATE as f32);
     engine.set_voice(voice);
@@ -57,36 +55,58 @@ fn main() {
 
         for &s in &buf[..chunk] {
             let clamped = s.clamp(-1.0, 1.0);
-            writer.write_sample((clamped * i16::MAX as f32) as i16).unwrap();
+            writer
+                .write_sample((clamped * i16::MAX as f32) as i16)
+                .unwrap();
         }
         pos += chunk;
     }
 
     writer.finalize().expect("finalize wav");
-    println!("Done. {:.1}s + {:.1}s release = {} samples.",
-        NOTE_DUR_S, RELEASE_S, total_samples);
+    println!(
+        "Done. {:.1}s + {:.1}s release = {} samples.",
+        NOTE_DUR_S, RELEASE_S, total_samples
+    );
 }
 
 fn dump_voice(v: &xdx_core::dx100::Dx100Voice, midi_note: u8) {
     use xdx_core::dx100::FREQ_RATIOS;
-    let base_hz = 440.0 * 2.0_f32.powf((midi_note as f32 - 69.0
-        + v.transpose as f32 - 24.0) / 12.0);
+    let base_hz =
+        440.0 * 2.0_f32.powf((midi_note as f32 - 69.0 + v.transpose as f32 - 24.0) / 12.0);
 
     println!("=== Voice: \"{}\" ===", v.name_str());
-    println!("Algorithm: {} (display {})  Feedback: {}  Transpose: {} (center=24)",
-        v.algorithm, v.algorithm + 1, v.feedback, v.transpose);
+    println!(
+        "Algorithm: {} (display {})  Feedback: {}  Transpose: {} (center=24)",
+        v.algorithm,
+        v.algorithm + 1,
+        v.feedback,
+        v.transpose
+    );
     println!("MIDI note: {} → base {:.1} Hz", midi_note, base_hz);
     println!();
-    println!("{:<6} {:>4} {:>4} {:>4} {:>4} {:>4}  {:>9}  {:>5}(x{:.2})  {:>6}",
-        "Op", "AR", "D1R", "D2R", "RR", "D1L", "out_level", "freq_r", 0.0_f32, "detune");
+    println!(
+        "{:<6} {:>4} {:>4} {:>4} {:>4} {:>4}  {:>9}  {:>5}(x{:.2})  {:>6}",
+        "Op", "AR", "D1R", "D2R", "RR", "D1L", "out_level", "freq_r", 0.0_f32, "detune"
+    );
     println!("{}", "-".repeat(70));
     for (i, op) in v.ops.iter().enumerate() {
         let ratio = FREQ_RATIOS[(op.freq_ratio as usize).min(63)];
         let freq_hz = base_hz * ratio;
         let detune_cents = (op.detune as f32 - 3.0) * 3.0;
-        println!("OP{}    {:>4} {:>4} {:>4} {:>4} {:>4}  {:>9}  {:>5}(x{:.2} ={:>7.1}Hz) {:>+.0}ct",
-            i + 1, op.ar, op.d1r, op.d2r, op.rr, op.d1l,
-            op.out_level, op.freq_ratio, ratio, freq_hz, detune_cents);
+        println!(
+            "OP{}    {:>4} {:>4} {:>4} {:>4} {:>4}  {:>9}  {:>5}(x{:.2} ={:>7.1}Hz) {:>+.0}ct",
+            i + 1,
+            op.ar,
+            op.d1r,
+            op.d2r,
+            op.rr,
+            op.d1l,
+            op.out_level,
+            op.freq_ratio,
+            ratio,
+            freq_hz,
+            detune_cents
+        );
     }
     println!();
 }

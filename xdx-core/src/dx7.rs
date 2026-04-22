@@ -1,9 +1,9 @@
 /// DX7 operator parameters (6 operators per voice)
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dx7Operator {
-    pub eg_rate: [u8; 4],    // EG Rate 1-4 (0-99)
-    pub eg_level: [u8; 4],   // EG Level 1-4 (0-99)
-    pub kbd_lev_scl_brk_pt: u8, // Keyboard Level Scaling Break Point (0-99)
+    pub eg_rate: [u8; 4],        // EG Rate 1-4 (0-99)
+    pub eg_level: [u8; 4],       // EG Level 1-4 (0-99)
+    pub kbd_lev_scl_brk_pt: u8,  // Keyboard Level Scaling Break Point (0-99)
     pub kbd_lev_scl_lft_dep: u8, // Left Depth (0-99)
     pub kbd_lev_scl_rht_dep: u8, // Right Depth (0-99)
     pub kbd_lev_scl_lft_crv: u8, // Left Curve (0-3)
@@ -40,8 +40,15 @@ pub struct Dx7Voice {
 
 impl Dx7Voice {
     pub fn name_str(&self) -> String {
-        self.name.iter()
-            .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '?' })
+        self.name
+            .iter()
+            .map(|&b| {
+                if b.is_ascii_graphic() || b == b' ' {
+                    b as char
+                } else {
+                    '?'
+                }
+            })
             .collect::<String>()
             .trim_end()
             .to_string()

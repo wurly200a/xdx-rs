@@ -10,7 +10,8 @@ fn vmem_roundtrip_byte_identical() {
     if encoded != ALL_VOICES_SYX {
         for (i, (&a, &b)) in ALL_VOICES_SYX.iter().zip(encoded.iter()).enumerate() {
             if a != b {
-                println!("byte[{i}]: original=0x{a:02X} encoded=0x{b:02X}  (voice {}, vmem_off {})",
+                println!(
+                    "byte[{i}]: original=0x{a:02X} encoded=0x{b:02X}  (voice {}, vmem_off {})",
                     if i >= 6 { (i - 6) / 128 } else { 0 },
                     if i >= 6 { (i - 6) % 128 } else { 0 }
                 );

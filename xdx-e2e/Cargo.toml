@@ -5,6 +5,5 @@ edition = "2021"
 
 [dependencies]
 xdx-midi = { path = "../xdx-midi", features = ["real-midi"] }
-
-[dev-dependencies]
 xdx-core = { path = "../xdx-core" }
+hound    = "3"

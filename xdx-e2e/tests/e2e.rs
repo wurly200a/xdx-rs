@@ -24,33 +24,29 @@
 
 use std::time::{Duration, Instant};
 use xdx_core::sysex::{
-    dx100_decode_1voice, dx100_encode_1voice,
-    dx100_decode_32voice, dx100_encode_32voice,
+    dx100_decode_1voice, dx100_decode_32voice, dx100_encode_1voice, dx100_encode_32voice,
 };
 use xdx_midi::{MidiEvent, MidiManager};
 
 // DX100 "Parameter Change Bulk Dump Request" for 1-voice edit buffer
-const FETCH_1VOICE:  &[u8] = &[0xF0, 0x43, 0x20, 0x03, 0xF7];
+const FETCH_1VOICE: &[u8] = &[0xF0, 0x43, 0x20, 0x03, 0xF7];
 // DX100 "Parameter Change Bulk Dump Request" for 32-voice bank
 const FETCH_32VOICE: &[u8] = &[0xF0, 0x43, 0x20, 0x04, 0xF7];
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-static IVORY_EBONY_SYX: &[u8] =
-    include_bytes!("../../testdata/syx/IvoryEbony.syx");
-static VIBRABELLE_SYX: &[u8] =
-    include_bytes!("../../testdata/syx/Vibrabelle.syx");
-static ALL_VOICES_SYX: &[u8] =
-    include_bytes!("../../testdata/syx/all_voices.syx");
+static IVORY_EBONY_SYX: &[u8] = include_bytes!("../../testdata/syx/IvoryEbony.syx");
+static VIBRABELLE_SYX: &[u8] = include_bytes!("../../testdata/syx/Vibrabelle.syx");
+static ALL_VOICES_SYX: &[u8] = include_bytes!("../../testdata/syx/all_voices.syx");
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn midi_ports() -> (String, String) {
-    let in_port  = std::env::var("XDX_MIDI_IN")
-        .expect("set XDX_MIDI_IN to the MIDI input port name");
-    let out_port = std::env::var("XDX_MIDI_OUT")
-        .expect("set XDX_MIDI_OUT to the MIDI output port name");
+    let in_port =
+        std::env::var("XDX_MIDI_IN").expect("set XDX_MIDI_IN to the MIDI input port name");
+    let out_port =
+        std::env::var("XDX_MIDI_OUT").expect("set XDX_MIDI_OUT to the MIDI output port name");
     (in_port, out_port)
 }
 
@@ -60,7 +56,11 @@ fn recv_sysex(mm: &mut MidiManager, timeout: Duration) -> Option<Vec<u8>> {
     while Instant::now() < deadline {
         match mm.try_recv() {
             Some(MidiEvent::SysEx(data)) => {
-                println!("  [IN] SysEx ({} bytes): {:02X?}", data.len(), &data[..data.len().min(16)]);
+                println!(
+                    "  [IN] SysEx ({} bytes): {:02X?}",
+                    data.len(),
+                    &data[..data.len().min(16)]
+                );
                 return Some(data);
             }
             Some(MidiEvent::Other(data)) if data != [0xFE] => {
@@ -106,14 +106,26 @@ fn test_midi_open_close() {
     let mut mm = MidiManager::new();
 
     mm.open_in(&in_port).expect("open MIDI IN");
-    assert!(mm.in_connected(), "MIDI IN should be connected after open_in");
+    assert!(
+        mm.in_connected(),
+        "MIDI IN should be connected after open_in"
+    );
     mm.close_in();
-    assert!(!mm.in_connected(), "MIDI IN should be disconnected after close_in");
+    assert!(
+        !mm.in_connected(),
+        "MIDI IN should be disconnected after close_in"
+    );
 
     mm.open_out(&out_port).expect("open MIDI OUT");
-    assert!(mm.out_connected(), "MIDI OUT should be connected after open_out");
+    assert!(
+        mm.out_connected(),
+        "MIDI OUT should be connected after open_out"
+    );
     mm.close_out();
-    assert!(!mm.out_connected(), "MIDI OUT should be disconnected after close_out");
+    assert!(
+        !mm.out_connected(),
+        "MIDI OUT should be disconnected after close_out"
+    );
 }
 
 /// Diagnostic: send fetch request and print every MIDI event received.
@@ -132,14 +144,21 @@ fn test_midi_diag_fetch() {
     println!("Sending fetch request: {:02X?}", FETCH_1VOICE);
     mm.send(FETCH_1VOICE).expect("send fetch request");
 
-    println!("Waiting {}s for any MIDI IN events...", RECV_TIMEOUT.as_secs());
+    println!(
+        "Waiting {}s for any MIDI IN events...",
+        RECV_TIMEOUT.as_secs()
+    );
     let deadline = Instant::now() + RECV_TIMEOUT;
     let mut count = 0usize;
     while Instant::now() < deadline {
         match mm.try_recv() {
             Some(MidiEvent::SysEx(data)) => {
                 count += 1;
-                println!("  event {count}: SysEx ({} bytes): {:02X?}", data.len(), data);
+                println!(
+                    "  event {count}: SysEx ({} bytes): {:02X?}",
+                    data.len(),
+                    data
+                );
             }
             Some(MidiEvent::Other(data)) => {
                 count += 1;
@@ -178,11 +197,16 @@ fn test_diag_fetch_32voice() {
             Some(MidiEvent::SysEx(data)) => {
                 count += 1;
                 sysex_total += data.len();
-                println!("  event {count}: SysEx {} bytes, first 32: {:02X?}", data.len(), &data[..data.len().min(32)]);
+                println!(
+                    "  event {count}: SysEx {} bytes, first 32: {:02X?}",
+                    data.len(),
+                    &data[..data.len().min(32)]
+                );
             }
             Some(MidiEvent::Other(data)) => {
                 count += 1;
-                if data != [0xFE] {  // suppress Active Sensing spam
+                if data != [0xFE] {
+                    // suppress Active Sensing spam
                     println!("  event {count}: Other: {:02X?}", data);
                 }
             }
@@ -215,7 +239,10 @@ fn test_voice_roundtrip() {
     // Setup: load IvoryEbony into the synth to establish a known initial state
     let voice_init = dx100_decode_1voice(IVORY_EBONY_SYX).expect("decode IvoryEbony");
     let syx_init = dx100_encode_1voice(&voice_init, 0);
-    println!("  [OUT] Setup: sending IvoryEbony ({} bytes)", syx_init.len());
+    println!(
+        "  [OUT] Setup: sending IvoryEbony ({} bytes)",
+        syx_init.len()
+    );
     mm.send(&syx_init).expect("setup send IvoryEbony");
     std::thread::sleep(Duration::from_millis(200));
 
@@ -306,5 +333,8 @@ fn test_bank_roundtrip() {
             println!("  fetched: {:?}", bank2_prime[i]);
         }
     }
-    assert!(all_ok, "one or more voice slots did not round-trip correctly (see output above)");
+    assert!(
+        all_ok,
+        "one or more voice slots did not round-trip correctly (see output above)"
+    );
 }
