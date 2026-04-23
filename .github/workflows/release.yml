@@ -21,12 +21,15 @@ jobs:
           - os: windows-latest
             binary: target/release/xdx-gui.exe
             asset_name: xdx-gui-windows-x86_64.exe
+            archive: xdx-gui-windows-x86_64.exe
           - os: macos-latest
             binary: target/release/xdx-gui
             asset_name: xdx-gui-macos-x86_64
+            archive: xdx-gui-macos-x86_64.tar.gz
           - os: ubuntu-latest
             binary: target/release/xdx-gui
             asset_name: xdx-gui-linux-x86_64
+            archive: xdx-gui-linux-x86_64.tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -55,10 +58,14 @@ jobs:
         shell: bash
         run: cp ${{ matrix.binary }} ${{ matrix.asset_name }}
 
+      - name: Archive binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: tar czf ${{ matrix.archive }} ${{ matrix.asset_name }}
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset_name }}
+          files: ${{ matrix.archive }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
