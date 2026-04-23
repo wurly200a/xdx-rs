@@ -10,16 +10,33 @@ env:
 
 jobs:
   build:
-    name: Build Windows binary
-    runs-on: windows-latest
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            binary: target/release/xdx-gui.exe
+            asset_name: xdx-gui-windows-x86_64.exe
+          - os: macos-latest
+            binary: target/release/xdx-gui
+            asset_name: xdx-gui-macos-x86_64
+          - os: ubuntu-latest
+            binary: target/release/xdx-gui
+            asset_name: xdx-gui-linux-x86_64
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -34,10 +51,14 @@ jobs:
       - name: Build release binary
         run: cargo build -p xdx-gui --release
 
-      - name: Create GitHub Release
+      - name: Rename binary
+        shell: bash
+        run: cp ${{ matrix.binary }} ${{ matrix.asset_name }}
+
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/xdx-gui.exe
+          files: ${{ matrix.asset_name }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
