@@ -195,6 +195,7 @@ struct App {
     algo_textures: Vec<egui::TextureHandle>,
     pc_kbd_notes: std::collections::HashSet<u8>,
     voice_dirty: bool, // true → push voice to audio engine on next frame
+    midi_ch: u8,       // 0-15 (displayed as 1-16)
 }
 
 impl App {
@@ -230,6 +231,7 @@ impl App {
             algo_textures,
             pc_kbd_notes: std::collections::HashSet::new(),
             voice_dirty: true, // push initial voice on first frame
+            midi_ch: 0,
         };
         app.start_port_scan(); // scan in background at startup
         app
@@ -303,7 +305,7 @@ impl App {
     }
 
     fn write_file(&mut self, path: PathBuf) {
-        let bytes = dx100_encode_1voice(&self.voice, 0);
+        let bytes = dx100_encode_1voice(&self.voice, self.midi_ch);
         match std::fs::write(&path, &bytes) {
             Err(e) => self.status = format!("Save failed: {e}"),
             Ok(()) => {
@@ -364,7 +366,7 @@ impl App {
     }
 
     fn write_bank_file(&mut self, path: PathBuf) {
-        let bytes = dx100_encode_32voice(&self.bank, 0);
+        let bytes = dx100_encode_32voice(&self.bank, self.midi_ch);
         match std::fs::write(&path, &bytes) {
             Err(e) => self.status = format!("Save failed: {e}"),
             Ok(()) => {
@@ -540,7 +542,7 @@ impl eframe::App for App {
                     a.note_on(note, 100);
                 }
                 if self.midi_manager.out_connected() {
-                    let _ = self.midi_manager.send(&[0x90, note, 100]);
+                    let _ = self.midi_manager.send(&[0x90 | self.midi_ch, note, 100]);
                 }
             }
             for note in released {
@@ -548,7 +550,7 @@ impl eframe::App for App {
                     a.note_off(note);
                 }
                 if self.midi_manager.out_connected() {
-                    let _ = self.midi_manager.send(&[0x80, note, 0]);
+                    let _ = self.midi_manager.send(&[0x80 | self.midi_ch, note, 0]);
                 }
             }
             if self.audio.is_some() || self.midi_manager.out_connected() {
@@ -618,6 +620,17 @@ impl eframe::App for App {
                             let sel = self.midi_out_sel.as_deref() == Some(name.as_str());
                             if ui.selectable_label(sel, &name).clicked() {
                                 self.midi_out_sel = if sel { None } else { Some(name) };
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.menu_button(format!("MIDI CH: {}", self.midi_ch + 1), |ui| {
+                        for ch in 0u8..16 {
+                            if ui
+                                .selectable_label(self.midi_ch == ch, format!("{}", ch + 1))
+                                .clicked()
+                            {
+                                self.midi_ch = ch;
                                 ui.close_menu();
                             }
                         }
@@ -841,7 +854,7 @@ impl eframe::App for App {
                                     .and_then(|_| self.ensure_in())
                                     .and_then(|_| {
                                         self.midi_manager
-                                            .send(&[0xF0, 0x43, 0x20, 0x04, 0xF7])
+                                            .send(&[0xF0, 0x43, 0x20 | self.midi_ch, 0x04, 0xF7])
                                             .map_err(|e| e.to_string())
                                     });
                             match result {
@@ -859,7 +872,7 @@ impl eframe::App for App {
                         .add_enabled(!any_fetch, egui::Button::new("Send"))
                         .clicked()
                     {
-                        let bytes = dx100_encode_32voice(&self.bank, 0);
+                        let bytes = dx100_encode_32voice(&self.bank, self.midi_ch);
                         let result = self.ensure_out().and_then(|_| {
                             self.midi_manager
                                 .send_then_close(&bytes)
@@ -975,7 +988,7 @@ impl eframe::App for App {
                                 .and_then(|_| self.ensure_in())
                                 .and_then(|_| {
                                     self.midi_manager
-                                        .send(&[0xF0, 0x43, 0x20, 0x03, 0xF7])
+                                        .send(&[0xF0, 0x43, 0x20 | self.midi_ch, 0x03, 0xF7])
                                         .map_err(|e| e.to_string())
                                 });
                         match result {
@@ -993,7 +1006,7 @@ impl eframe::App for App {
                     .add_enabled(!any_fetch, egui::Button::new("Send"))
                     .clicked()
                 {
-                    let bytes = dx100_encode_1voice(&self.voice, 0);
+                    let bytes = dx100_encode_1voice(&self.voice, self.midi_ch);
                     let result = self.ensure_out().and_then(|_| {
                         self.midi_manager
                             .send_then_close(&bytes)
