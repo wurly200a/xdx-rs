@@ -44,10 +44,10 @@ fn find_onset(bins: &[f32]) -> usize {
 // ── Metrics ───────────────────────────────────────────────────────────────────
 
 struct EgMetrics {
-    atk90_ms: f32,  // ms from onset to normalized RMS ≥ 0.90
-    d1l: f32,       // mean normalized RMS in last 10% of hold window
-    rls50_ms: f32,  // ms from note-off to 50% of note-off level
-    rls90_ms: f32,  // ms from note-off to 10% of note-off level
+    atk90_ms: f32, // ms from onset to normalized RMS ≥ 0.90
+    d1l: f32,      // mean normalized RMS in last 10% of hold window
+    rls50_ms: f32, // ms from note-off to 50% of note-off level
+    rls90_ms: f32, // ms from note-off to 10% of note-off level
 }
 
 fn compute_metrics(bins: &[f32], onset: usize, hold_bins: usize) -> EgMetrics {
@@ -96,7 +96,13 @@ fn compute_metrics(bins: &[f32], onset: usize, hold_bins: usize) -> EgMetrics {
 
 // ── Envelope table ────────────────────────────────────────────────────────────
 
-fn print_envelope(dx_bins: &[f32], sy_bins: &[f32], dx_onset: usize, sy_onset: usize, hold_bins: usize) {
+fn print_envelope(
+    dx_bins: &[f32],
+    sy_bins: &[f32],
+    dx_onset: usize,
+    sy_onset: usize,
+    hold_bins: usize,
+) {
     let dx_peak = dx_bins.iter().cloned().fold(0.0_f32, f32::max);
     let sy_peak = sy_bins.iter().cloned().fold(0.0_f32, f32::max);
     let dx_get = |n: usize| dx_bins.get(dx_onset + n).copied().unwrap_or(0.0) / dx_peak;
@@ -126,7 +132,10 @@ fn print_envelope(dx_bins: &[f32], sy_bins: &[f32], dx_onset: usize, sy_onset: u
         let should_print = in_attack || in_release || changed || note_off || !prev_printed;
 
         if note_off {
-            println!("  {:>6}  {:─<6}  {:─<6}  {:─<5}  ← NOTE OFF", "───", "───", "───", "───");
+            println!(
+                "  {:>6}  {:─<6}  {:─<6}  {:─<5}  ← NOTE OFF",
+                "───", "───", "───", "───"
+            );
         }
         if should_print {
             let ratio = if sv > 0.005 {
@@ -193,10 +202,7 @@ fn compare_pair(dx100_path: &str, synth_path: &str, hold_ms: f32, verbose: bool)
         "  atk(90%): HW={:7.1}ms  SY={:7.1}ms",
         dx_m.atk90_ms, sy_m.atk90_ms
     );
-    println!(
-        "  d1l_lvl:  HW={:7.3}    SY={:7.3}",
-        dx_m.d1l, sy_m.d1l
-    );
+    println!("  d1l_lvl:  HW={:7.3}    SY={:7.3}", dx_m.d1l, sy_m.d1l);
     println!(
         "  rls(50%): HW={:7.1}ms  SY={:7.1}ms  (from note-off)",
         dx_m.rls50_ms, sy_m.rls50_ms
@@ -226,8 +232,16 @@ fn main() {
         println!();
         println!(
             "{:<3}  {:<10}  {:>9}  {:>9}  {:>7}  {:>7}  {:>9}  {:>9}  {:>9}  {:>9}",
-            "#", "Name", "atk90(HW)", "atk90(SY)", "d1l(HW)", "d1l(SY)",
-            "rls50(HW)", "rls50(SY)", "rls90(HW)", "rls90(SY)"
+            "#",
+            "Name",
+            "atk90(HW)",
+            "atk90(SY)",
+            "d1l(HW)",
+            "d1l(SY)",
+            "rls50(HW)",
+            "rls50(SY)",
+            "rls90(HW)",
+            "rls90(SY)"
         );
         println!("{}", "-".repeat(100));
 

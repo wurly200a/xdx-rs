@@ -397,12 +397,24 @@ fn draw_overlay(ui: &mut egui::Ui, row: &VoiceRow, size: Vec2) {
     }
 
     waveform_inner(
-        &painter, rect, &row.dx_bins, row.dx_onset, row.dx_peak,
-        row.hold_bins, total, HW_COLOR,
+        &painter,
+        rect,
+        &row.dx_bins,
+        row.dx_onset,
+        row.dx_peak,
+        row.hold_bins,
+        total,
+        HW_COLOR,
     );
     waveform_inner(
-        &painter, rect, &row.sy_bins, row.sy_onset, row.sy_peak,
-        row.hold_bins, total, SY_COLOR,
+        &painter,
+        rect,
+        &row.sy_bins,
+        row.sy_onset,
+        row.sy_peak,
+        row.hold_bins,
+        total,
+        SY_COLOR,
     );
 
     // Small legend
@@ -437,9 +449,7 @@ fn waveform_inner(
     let usable_h = rect.height() * 0.90;
 
     let to_x = |n: usize| rect.left() + (n as f32 / total as f32) * rect.width();
-    let to_y = |v: f32| {
-        rect.top() + margin_top + (1.0 - (v / peak).clamp(0.0, 1.0)) * usable_h
-    };
+    let to_y = |v: f32| rect.top() + margin_top + (1.0 - (v / peak).clamp(0.0, 1.0)) * usable_h;
 
     // Note-off line
     let nx = to_x(hold_bins.min(total));
@@ -511,7 +521,12 @@ fn metrics_grid(ui: &mut egui::Ui, dx: &EgMetrics, sy: &EgMetrics) {
         .show(ui, |ui| {
             // atk90
             ui.label(RichText::new("atk90:").weak().small());
-            ui.label(RichText::new(ms(dx.atk90_ms)).color(HW_COLOR).monospace().small());
+            ui.label(
+                RichText::new(ms(dx.atk90_ms))
+                    .color(HW_COLOR)
+                    .monospace()
+                    .small(),
+            );
             ui.label(
                 RichText::new(ms(sy.atk90_ms))
                     .color(match_color(dx.atk90_ms, sy.atk90_ms))
@@ -522,7 +537,12 @@ fn metrics_grid(ui: &mut egui::Ui, dx: &EgMetrics, sy: &EgMetrics) {
 
             // d1l
             ui.label(RichText::new("d1l:  ").weak().small());
-            ui.label(RichText::new(lv(dx.d1l)).color(HW_COLOR).monospace().small());
+            ui.label(
+                RichText::new(lv(dx.d1l))
+                    .color(HW_COLOR)
+                    .monospace()
+                    .small(),
+            );
             ui.label(
                 RichText::new(lv(sy.d1l))
                     .color(match_color(dx.d1l, sy.d1l))
@@ -533,7 +553,12 @@ fn metrics_grid(ui: &mut egui::Ui, dx: &EgMetrics, sy: &EgMetrics) {
 
             // rls50
             ui.label(RichText::new("rls50:").weak().small());
-            ui.label(RichText::new(ms(dx.rls50_ms)).color(HW_COLOR).monospace().small());
+            ui.label(
+                RichText::new(ms(dx.rls50_ms))
+                    .color(HW_COLOR)
+                    .monospace()
+                    .small(),
+            );
             ui.label(
                 RichText::new(ms(sy.rls50_ms))
                     .color(match_color(dx.rls50_ms, sy.rls50_ms))
@@ -544,7 +569,12 @@ fn metrics_grid(ui: &mut egui::Ui, dx: &EgMetrics, sy: &EgMetrics) {
 
             // rls90
             ui.label(RichText::new("rls90:").weak().small());
-            ui.label(RichText::new(ms(dx.rls90_ms)).color(HW_COLOR).monospace().small());
+            ui.label(
+                RichText::new(ms(dx.rls90_ms))
+                    .color(HW_COLOR)
+                    .monospace()
+                    .small(),
+            );
             ui.label(
                 RichText::new(ms(sy.rls90_ms))
                     .color(match_color(dx.rls90_ms, sy.rls90_ms))
