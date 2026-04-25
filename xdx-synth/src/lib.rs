@@ -38,11 +38,16 @@ impl Envelope {
         }
     }
 
-    fn init(&mut self, op: &xdx_core::dx100::Dx100Operator, sr: f32) {
-        self.ar_inc = rate_inc(op.ar, 31, sr);
-        self.d1r_mul = rate_mul(op.d1r, 31, 0.000092, sr);
-        self.d2r_mul = rate_mul(op.d2r, 31, 0.000092, sr);
-        self.rr_mul = rate_mul(op.rr, 15, 0.0014, sr);
+    fn init(&mut self, op: &xdx_core::dx100::Dx100Operator, sr: f32, midi_note: u8) {
+        // kbd_rate_scl 0-3: add rate_boost per octave above C3 (MIDI 60).
+        // Formula is approximate — calibrate from hardware if needed.
+        let semitones_up = (midi_note as f32 - 60.0).max(0.0);
+        let rate_boost = (op.kbd_rate_scl as f32 * semitones_up / 12.0).round() as u8;
+
+        self.ar_inc = rate_inc((op.ar + rate_boost).min(31), 31, sr);
+        self.d1r_mul = rate_mul((op.d1r + rate_boost).min(31), 31, 0.000092, sr);
+        self.d2r_mul = rate_mul((op.d2r + rate_boost).min(31), 31, 0.000092, sr);
+        self.rr_mul = rate_mul((op.rr + rate_boost).min(15), 15, 0.0014, sr);
         // DX100: D1L 0-15 uses 3 dB per step (√2 factor per step)
         self.d1l = if op.d1l == 0 {
             0.0
@@ -166,6 +171,9 @@ impl Note {
     fn start(midi_note: u8, velocity: u8, voice: &Dx100Voice, sr: f32) -> Self {
         let base_hz = midi_to_hz(midi_note, voice.transpose);
         let vel_scale = (velocity as f32 / 127.0).powi(2);
+        // kbd_lev_scl: reduce out_level above C3 (MIDI 60).
+        // Full kbd_lev_scl reduction at +45 semitones — approximate, calibrate from hardware.
+        let semitones_up = (midi_note as f32 - 60.0).max(0.0);
         let mut ops = [
             Operator::new(),
             Operator::new(),
@@ -177,10 +185,10 @@ impl Note {
             let ratio = FREQ_RATIOS[(p.freq_ratio as usize).min(63)];
             let detune_cents = (p.detune as f32 - 3.0) * 3.0;
             op.freq = base_hz * ratio * 2.0_f32.powf(detune_cents / 1200.0);
-            // Velocity sensitivity: blend out_level with velocity
+            let kls_reduction = (p.kbd_lev_scl as f32 * semitones_up / 45.0).round() as u8;
             let vel_factor = 1.0 - (p.key_vel_sens as f32 / 7.0) * (1.0 - vel_scale);
-            op.amp = level_to_amp(p.out_level) * vel_factor;
-            op.env.init(p, sr);
+            op.amp = level_to_amp(p.out_level.saturating_sub(kls_reduction)) * vel_factor;
+            op.env.init(p, sr, midi_note);
         }
         Note {
             midi_note,
