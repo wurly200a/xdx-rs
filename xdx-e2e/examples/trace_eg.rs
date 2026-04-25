@@ -27,7 +27,7 @@ fn rate_inc(r: u8, max: u8, sr: f32) -> f32 {
     if r == 0 {
         return 0.0;
     }
-    let t = 0.0005_f32 * 2.0_f32.powf((max as f32 - r as f32) * 0.55);
+    let t = 0.000085_f32 * 2.0_f32.powf((max as f32 - r as f32) * 0.55);
     1.0 / (t * sr)
 }
 fn rate_mul(r: u8, max: u8, sr: f32) -> f32 {

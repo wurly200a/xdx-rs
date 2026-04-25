@@ -17,7 +17,7 @@ enum Stage {
 #[derive(Clone)]
 struct Envelope {
     stage: Stage,
-    level: f32,   // 0.0..=1.0 linear amplitude
+    level: f32,   // 0.0..=1.0 linear amplitude (output)
     ar_inc: f32,  // per-sample linear increment (attack)
     d1r_mul: f32, // per-sample exponential multiplier (decay1)
     d2r_mul: f32, // per-sample exponential multiplier (decay2)
@@ -98,12 +98,13 @@ impl Envelope {
     }
 }
 
-// Attack: linear increment per sample.  rate=max → ~0.5 ms; rate=0 → infinite.
+// Attack: linear increment per sample.  rate=max → ~0.085 ms; rate=0 → infinite.
+// Coefficient calibrated from real DX100 hardware: AR=20 → onset(90%) ≈ 5ms.
 fn rate_inc(rate: u8, max_rate: u8, sr: f32) -> f32 {
     if rate == 0 {
         return 0.0;
     }
-    let t = 0.0005_f32 * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.55);
+    let t = 0.000085_f32 * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.55);
     1.0 / (t * sr)
 }
 
