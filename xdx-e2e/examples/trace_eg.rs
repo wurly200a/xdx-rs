@@ -30,11 +30,11 @@ fn rate_inc(r: u8, max: u8, sr: f32) -> f32 {
     let t = 0.000085_f32 * 2.0_f32.powf((max as f32 - r as f32) * 0.55);
     1.0 / (t * sr)
 }
-fn rate_mul(r: u8, max: u8, sr: f32) -> f32 {
+fn rate_mul(r: u8, max: u8, coeff: f32, sr: f32) -> f32 {
     if r == 0 {
         return 1.0;
     }
-    let t = 0.0005_f32 * 2.0_f32.powf((max as f32 - r as f32) * 0.55);
+    let t = coeff * 2.0_f32.powf((max as f32 - r as f32) * 0.55);
     (-std::f32::consts::LN_2 / (t * sr)).exp()
 }
 
@@ -45,14 +45,14 @@ impl Env {
         } else if op.d1l >= 15 {
             1.0
         } else {
-            2.0_f32.powf(op.d1l as f32 - 15.0)
+            2.0_f32.powf((op.d1l as f32 - 15.0) * 0.5)
         };
         Env {
             stage: Stage::Attack,
             level: 0.0,
             ar_inc: rate_inc(op.ar, 31, sr),
-            d1r_mul: rate_mul(op.d1r, 31, sr),
-            d2r_mul: rate_mul(op.d2r, 31, sr),
+            d1r_mul: rate_mul(op.d1r, 31, 0.000092, sr),
+            d2r_mul: rate_mul(op.d2r, 31, 0.000092, sr),
             d1l,
         }
     }
