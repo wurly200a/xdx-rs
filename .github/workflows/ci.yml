@@ -8,8 +8,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ── Detect whether source files changed ──────────────────────────────────────
+  # Docs-only PRs (docs/, *.md, .claude/, testdata/, references/) skip the
+  # build jobs.  checkpoint_success still runs and passes so branch protection
+  # rules with a required status check are satisfied.
+  check_changes:
+    name: Detect changed files
+    runs-on: ubuntu-latest
+    outputs:
+      src_changed: ${{ steps.filter.outputs.src_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for source changes
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE '^(xdx-|Cargo\.|vendor/)'; then
+            echo "src_changed=true" >> $GITHUB_OUTPUT
+            echo "Source files changed – running full CI"
+          else
+            echo "src_changed=false" >> $GITHUB_OUTPUT
+            echo "No source files changed – skipping build jobs"
+          fi
+
+  # ── fmt / clippy / test ───────────────────────────────────────────────────────
   check:
     name: fmt / clippy / test
+    needs: check_changes
+    if: needs.check_changes.outputs.src_changed == 'true'
     runs-on: windows-latest
 
     steps:
@@ -30,20 +61,20 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      # ── Format ────────────────────────────────────────────────────────────────
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      # ── Lint (exclude GUI which needs a display device) ───────────────────────
       - name: cargo clippy (core + synth)
         run: cargo clippy -p xdx-core -p xdx-synth -- -D warnings
 
-      # ── Tests ─────────────────────────────────────────────────────────────────
       - name: cargo test xdx-core
         run: cargo test -p xdx-core --lib
 
+  # ── Cross-platform build ──────────────────────────────────────────────────────
   build:
     name: Build ${{ matrix.os }}
+    needs: check_changes
+    if: needs.check_changes.outputs.src_changed == 'true'
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -72,3 +103,34 @@ jobs:
 
       - name: cargo build xdx-gui
         run: cargo build -p xdx-gui
+
+  # ── Required merge gate ───────────────────────────────────────────────────────
+  # Always runs.  Passes when check + build succeeded, or when both were
+  # skipped (docs-only PR).  Fails if any job actually failed.
+  # Configure this job as the sole required status check in branch protection.
+  checkpoint_success:
+    name: CI passed
+    if: always()
+    needs: [check_changes, check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs passed or were skipped
+        run: |
+          changes="${{ needs.check_changes.result }}"
+          check="${{ needs.check.result }}"
+          build="${{ needs.build.result }}"
+          echo "check_changes : $changes"
+          echo "check         : $check"
+          echo "build         : $build"
+          if [[ "$changes" != "success" ]]; then
+            echo "check_changes failed – cannot determine what changed."
+            exit 1
+          fi
+          if [[ "$check" == "success" || "$check" == "skipped" ]] && \
+             [[ "$build" == "success" || "$build" == "skipped" ]]; then
+            echo "CI passed (docs-only PR: build skipped)." \
+              || echo "CI passed."
+          else
+            echo "CI failed."
+            exit 1
+          fi
