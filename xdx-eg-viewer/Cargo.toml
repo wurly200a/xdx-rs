@@ -1,0 +1,12 @@
+[package]
+name = "xdx-eg-viewer"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "eg-viewer"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.28"
+hound  = "3"

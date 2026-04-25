@@ -8,6 +8,14 @@ default      = ["real-midi"]
 real-midi    = ["xdx-midi/real-midi"]
 virtual-midi = ["xdx-midi/virtual-midi"]
 
+[[bin]]
+name = "xdx-compare"
+path = "src/main.rs"
+
+[[bin]]
+name = "record-eg-bank"
+path = "src/record_eg_bank.rs"
+
 [dependencies]
 xdx-core  = { path = "../xdx-core" }
 xdx-midi  = { path = "../xdx-midi", default-features = false }
