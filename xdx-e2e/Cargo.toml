@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-xdx-midi = { path = "../xdx-midi", features = ["real-midi"] }
-xdx-core = { path = "../xdx-core" }
-hound    = "3"
+xdx-midi  = { path = "../xdx-midi", features = ["real-midi"] }
+xdx-core  = { path = "../xdx-core" }
+xdx-synth = { path = "../xdx-synth" }
+hound     = "3"

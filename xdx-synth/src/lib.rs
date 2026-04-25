@@ -16,14 +16,13 @@ enum Stage {
 
 #[derive(Clone)]
 struct Envelope {
-    stage:     Stage,
-    level:     f32, // 0.0..=1.0 linear amplitude (output)
-    level_log: f32, // 0.0..=1.0 log-domain level used during attack (0=-96dB, 1=0dB)
-    ar_inc:    f32, // per-sample increment in log domain (attack)
-    d1r_mul:   f32, // per-sample exponential multiplier (decay1)
-    d2r_mul:   f32, // per-sample exponential multiplier (decay2)
-    rr_mul:    f32, // per-sample exponential multiplier (release)
-    d1l:       f32, // Decay-1 target level (linear, log-mapped)
+    stage: Stage,
+    level: f32,   // 0.0..=1.0 linear amplitude (output)
+    ar_inc: f32,  // per-sample linear increment (attack)
+    d1r_mul: f32, // per-sample exponential multiplier (decay1)
+    d2r_mul: f32, // per-sample exponential multiplier (decay2)
+    rr_mul: f32,  // per-sample exponential multiplier (release)
+    d1l: f32,     // Decay-1 target level (linear, log-mapped)
 }
 
 impl Envelope {
@@ -31,7 +30,6 @@ impl Envelope {
         Self {
             stage: Stage::Off,
             level: 0.0,
-            level_log: 0.0,
             ar_inc: 0.0,
             d1r_mul: 1.0,
             d2r_mul: 1.0,
@@ -54,7 +52,6 @@ impl Envelope {
             2.0_f32.powf(op.d1l as f32 - 15.0)
         };
         self.level = 0.0;
-        self.level_log = 0.0;
         self.stage = Stage::Attack;
     }
 
@@ -68,16 +65,8 @@ impl Envelope {
     fn tick(&mut self) -> f32 {
         match self.stage {
             Stage::Attack => {
-                // DX hardware tracks EG in log domain; linear-amplitude equivalent
-                // is an exponential curve (fast transient → characteristic piano attack).
-                self.level_log = (self.level_log + self.ar_inc).min(1.0);
-                self.level = if self.level_log == 0.0 {
-                    0.0
-                } else {
-                    10f32.powf((self.level_log - 1.0) * 4.8) // 4.8 = 96dB / 20
-                };
-                if self.level_log >= 1.0 {
-                    self.level = 1.0;
+                self.level = (self.level + self.ar_inc).min(1.0);
+                if self.level >= 1.0 {
                     self.stage = Stage::Decay1;
                 }
             }
@@ -109,12 +98,13 @@ impl Envelope {
     }
 }
 
-// Attack: linear increment per sample.  rate=max → ~0.5 ms; rate=0 → infinite.
+// Attack: linear increment per sample.  rate=max → ~0.085 ms; rate=0 → infinite.
+// Coefficient calibrated from real DX100 hardware: AR=20 → onset(90%) ≈ 5ms.
 fn rate_inc(rate: u8, max_rate: u8, sr: f32) -> f32 {
     if rate == 0 {
         return 0.0;
     }
-    let t = 0.0005_f32 * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.55);
+    let t = 0.000085_f32 * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.55);
     1.0 / (t * sr)
 }
 
