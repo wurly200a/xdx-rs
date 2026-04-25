@@ -107,7 +107,15 @@ fn main() {
     for i in 0..n {
         let voice = &voices[i];
         let name = voice.name_str();
-        let safe_name = name.trim().replace(' ', "_").replace('/', "-");
+        let safe_name: String = name
+            .trim()
+            .chars()
+            .map(|c| match c {
+                ' ' => '_',
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '-',
+                c => c,
+            })
+            .collect();
         let tag = format!("{:02}_{}", i + 1, safe_name);
 
         println!(
