@@ -40,16 +40,16 @@ impl Envelope {
 
     fn init(&mut self, op: &xdx_core::dx100::Dx100Operator, sr: f32) {
         self.ar_inc = rate_inc(op.ar, 31, sr);
-        self.d1r_mul = rate_mul(op.d1r, 31, sr);
-        self.d2r_mul = rate_mul(op.d2r, 31, sr);
-        self.rr_mul = rate_mul(op.rr, 15, sr);
-        // DX100: D1L 0-15 uses 6 dB per step (factor-of-2 per step)
+        self.d1r_mul = rate_mul(op.d1r, 31, 0.000092, sr);
+        self.d2r_mul = rate_mul(op.d2r, 31, 0.000092, sr);
+        self.rr_mul = rate_mul(op.rr, 15, 0.0014, sr);
+        // DX100: D1L 0-15 uses 3 dB per step (√2 factor per step)
         self.d1l = if op.d1l == 0 {
             0.0
         } else if op.d1l >= 15 {
             1.0
         } else {
-            2.0_f32.powf(op.d1l as f32 - 15.0)
+            2.0_f32.powf((op.d1l as f32 - 15.0) * 0.5)
         };
         self.level = 0.0;
         self.stage = Stage::Attack;
@@ -109,12 +109,12 @@ fn rate_inc(rate: u8, max_rate: u8, sr: f32) -> f32 {
 }
 
 // Decay/Release: exponential (multiplicative) per-sample factor.
-// Treats t as the half-life of the decay.  rate=0 → no decay (mul=1.0).
-fn rate_mul(rate: u8, max_rate: u8, sr: f32) -> f32 {
+// coeff calibrated from hardware: D1R/D2R=0.000092, RR=0.0014.  rate=0 → no decay.
+fn rate_mul(rate: u8, max_rate: u8, coeff: f32, sr: f32) -> f32 {
     if rate == 0 {
         return 1.0;
     }
-    let t = 0.0005_f32 * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.55);
+    let t = coeff * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.55);
     (-std::f32::consts::LN_2 / (t * sr)).exp()
 }
 
