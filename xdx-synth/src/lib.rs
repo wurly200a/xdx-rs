@@ -19,13 +19,13 @@ enum Stage {
 #[derive(Clone)]
 struct Envelope {
     stage: Stage,
-    level: f32,     // 0.0..=1.0 linear amplitude (output)
-    ar_inc_t: f32,  // per-sample increment to normalised attack time
-    ar_t: f32,      // normalised attack time 0..=1
-    d1r_mul: f32,   // per-sample exponential multiplier (decay1)
-    d2r_mul: f32,   // per-sample exponential multiplier (decay2)
-    rr_mul: f32,    // per-sample exponential multiplier (release)
-    d1l: f32,       // Decay-1 target level (linear, log-mapped)
+    level: f32,    // 0.0..=1.0 linear amplitude (output)
+    ar_inc_t: f32, // per-sample increment to normalised attack time
+    ar_t: f32,     // normalised attack time 0..=1
+    d1r_mul: f32,  // per-sample exponential multiplier (decay1)
+    d2r_mul: f32,  // per-sample exponential multiplier (decay2)
+    rr_mul: f32,   // per-sample exponential multiplier (release)
+    d1l: f32,      // Decay-1 target level (linear, log-mapped)
 }
 
 impl Envelope {
