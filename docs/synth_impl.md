@@ -4,7 +4,7 @@
 > プロジェクトの原則は英語または英語＋日本語併記ですが、このファイルは  
 > 実装完了後に削除予定の作業メモのため日本語のままとしています。
 
-最終更新: 2026-04-25 (kbd_lev_scl / kbd_rate_scl 実装)
+最終更新: 2026-04-26 (kbd_lev_scl / kbd_rate_scl キャリブ完了)
 
 ---
 
@@ -23,8 +23,8 @@
 | `freq_ratio` 周波数比 | 0-63 | `FREQ_RATIOS[64]` テーブル参照 | ✅ | |
 | `detune` デチューン | 0-6 (中心=3) | `(val - 3) * 3` cents | ✅ | |
 | `key_vel_sens` ベロシティ感度 | 0-7 | `vel_factor` 計算 | ⚠️ | 実装済・対ハードウェア精度未検証 |
-| `kbd_lev_scl` キーボードレベルスケーリング | 0-99 | `Note::start()` — kls_reduction | ⚠️ | 実装済・式は近似値（要キャリブ） |
-| `kbd_rate_scl` キーボードレートスケーリング | 0-3 | `Envelope::init()` — rate_boost | ⚠️ | 実装済・式は近似値（要キャリブ） |
+| `kbd_lev_scl` キーボードレベルスケーリング | 0-99 | `Note::start()` — kls_reduction | ✅ | キャリブ済: `floor(kls * 2^(note/12) / 400)` |
+| `kbd_rate_scl` キーボードレートスケーリング | 0-3 | `Envelope::init()` — rate_boost | ✅ | キャリブ済: `round(krs*(krs+1)/2 * note / 72)` |
 
 ### Dx100Voice（ボイス全体）
 

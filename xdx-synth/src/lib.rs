@@ -39,10 +39,13 @@ impl Envelope {
     }
 
     fn init(&mut self, op: &xdx_core::dx100::Dx100Operator, sr: f32, midi_note: u8) {
-        // kbd_rate_scl 0-3: add rate_boost per octave above C3 (MIDI 60).
-        // Formula is approximate — calibrate from hardware if needed.
-        let semitones_up = (midi_note as f32 - 60.0).max(0.0);
-        let rate_boost = (op.kbd_rate_scl as f32 * semitones_up / 12.0).round() as u8;
+        // kbd_rate_scl 0-3: EG rate boost scaling over all notes.
+        // Hardware calibration (kbs_calib, n48-n84):
+        //   krs maps non-linearly: effective_krs ≈ krs*(krs+1)/2  = [0,1,3,6]
+        //   boost ≈ effective_krs * note / 72  (normalised to C5 = MIDI 72)
+        // No hard breakpoint — applies at all notes proportional to pitch.
+        let effective_krs = (op.kbd_rate_scl * (op.kbd_rate_scl + 1)) / 2; // 0,1,3,6
+        let rate_boost = (effective_krs as f32 * midi_note as f32 / 72.0).round() as u8;
 
         self.ar_inc = rate_inc((op.ar + rate_boost).min(31), 31, sr);
         self.d1r_mul = rate_mul((op.d1r + rate_boost).min(31), 31, 0.000092, sr);
@@ -171,9 +174,11 @@ impl Note {
     fn start(midi_note: u8, velocity: u8, voice: &Dx100Voice, sr: f32) -> Self {
         let base_hz = midi_to_hz(midi_note, voice.transpose);
         let vel_scale = (velocity as f32 / 127.0).powi(2);
-        // kbd_lev_scl: reduce out_level above C3 (MIDI 60).
-        // Full kbd_lev_scl reduction at +45 semitones — approximate, calibrate from hardware.
-        let semitones_up = (midi_note as f32 - 60.0).max(0.0);
+        // kbd_lev_scl: exponential scaling over all notes.
+        // Hardware calibration shows reduction doubles per octave:
+        //   reduction = floor(kls * 2^(note/12) / 400)
+        // K=1/400 derived from DX100 recordings (kls=25/50, notes 48/60/72/84).
+        let kls_note_factor = 2.0_f32.powf(midi_note as f32 / 12.0);
         let mut ops = [
             Operator::new(),
             Operator::new(),
@@ -185,7 +190,7 @@ impl Note {
             let ratio = FREQ_RATIOS[(p.freq_ratio as usize).min(63)];
             let detune_cents = (p.detune as f32 - 3.0) * 3.0;
             op.freq = base_hz * ratio * 2.0_f32.powf(detune_cents / 1200.0);
-            let kls_reduction = (p.kbd_lev_scl as f32 * semitones_up / 45.0).round() as u8;
+            let kls_reduction = (p.kbd_lev_scl as f32 * kls_note_factor / 400.0) as u8;
             let vel_factor = 1.0 - (p.key_vel_sens as f32 / 7.0) * (1.0 - vel_scale);
             op.amp = level_to_amp(p.out_level.saturating_sub(kls_reduction)) * vel_factor;
             op.env.init(p, sr, midi_note);
