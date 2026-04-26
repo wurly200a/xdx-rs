@@ -54,7 +54,11 @@ fn decay_t50(bins: &[f32], onset: usize) -> f32 {
 
     // Find peak position within hold window
     let peak_pos = (onset..=end)
-        .max_by(|&a, &b| bins[a].partial_cmp(&bins[b]).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|&a, &b| {
+            bins[a]
+                .partial_cmp(&bins[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .unwrap_or(onset);
     let peak = bins[peak_pos];
     if peak < 1e-7 {
@@ -89,13 +93,23 @@ fn main() {
     let notes: &[(&str, i32)] = &[("n48", -12), ("n60", 0), ("n72", 12), ("n84", 24)];
 
     // Group A: kls sweep (voices 0-3)
-    let a_names  = ["SUST_BASE", "KLS_025",  "KLS_050",  "KLS_099"];
-    let a_files  = ["01_SUST_BASE.wav", "02_KLS_025.wav", "03_KLS_050.wav", "04_KLS_099.wav"];
+    let a_names = ["SUST_BASE", "KLS_025", "KLS_050", "KLS_099"];
+    let a_files = [
+        "01_SUST_BASE.wav",
+        "02_KLS_025.wav",
+        "03_KLS_050.wav",
+        "04_KLS_099.wav",
+    ];
     let a_kls: [u8; 4] = [0, 25, 50, 99];
 
     // Group B: krs sweep (voices 4-7)
-    let b_names  = ["DCY_BASE", "KRS1_D10", "KRS2_D10", "KRS3_D10"];
-    let b_files  = ["05_DCY_BASE.wav", "06_KRS1_D10.wav", "07_KRS2_D10.wav", "08_KRS3_D10.wav"];
+    let b_names = ["DCY_BASE", "KRS1_D10", "KRS2_D10", "KRS3_D10"];
+    let b_files = [
+        "05_DCY_BASE.wav",
+        "06_KRS1_D10.wav",
+        "07_KRS2_D10.wav",
+        "08_KRS3_D10.wav",
+    ];
     let b_krs: [u8; 4] = [0, 1, 2, 3];
 
     // Load all envelopes: data_a[note_idx][voice_idx], data_b[note_idx][voice_idx]
@@ -107,7 +121,9 @@ fn main() {
                 .map(|fname| {
                     let path = format!("{base_dir}/{ntag}/dx100/{fname}");
                     let v = load_rms(&path);
-                    if v.is_none() { eprintln!("  missing: {path}"); }
+                    if v.is_none() {
+                        eprintln!("  missing: {path}");
+                    }
                     v
                 })
                 .collect()
@@ -122,7 +138,9 @@ fn main() {
                 .map(|fname| {
                     let path = format!("{base_dir}/{ntag}/dx100/{fname}");
                     let v = load_rms(&path);
-                    if v.is_none() { eprintln!("  missing: {path}"); }
+                    if v.is_none() {
+                        eprintln!("  missing: {path}");
+                    }
                     v
                 })
                 .collect()
@@ -190,9 +208,9 @@ fn main() {
         print!("{:<16}", format!("{}(k={kls})", a_names[vi]));
         for (ni, &(_, off)) in notes.iter().enumerate() {
             let base = a_rms[ni][0];
-            let kv   = a_rms[ni][vi];
+            let kv = a_rms[ni][vi];
             if base > 1e-7 {
-                let db    = 20.0 * (kv / base).log10();
+                let db = 20.0 * (kv / base).log10();
                 let steps = (-db / DB_PER_STEP).max(0.0);
                 kls_meas[vi_off][ni] = steps;
                 print!("  {:>7.2}dB ({:>4.1}st)", db, steps);
@@ -222,7 +240,13 @@ fn main() {
             let note_midi = note_midis[ni];
             let pred = (kls as f32 * 2.0_f32.powf(note_midi as f32 / 12.0) / 400.0) as u8 as f32;
             let meas = kls_meas[vi_off][ni];
-            let mark = if (meas - pred).abs() < 1.0 { "✓" } else if (meas - pred).abs() < 2.0 { "△" } else { "✗" };
+            let mark = if (meas - pred).abs() < 1.0 {
+                "✓"
+            } else if (meas - pred).abs() < 2.0 {
+                "△"
+            } else {
+                "✗"
+            };
             print!("  {:>6.0}st({:>4.1}meas){}", pred, meas, mark);
         }
         println!();
@@ -266,7 +290,7 @@ fn main() {
     let mut krs_meas_boost: [[f32; 4]; 3] = [[f32::NAN; 4]; 3];
 
     for vi_off in 0..3 {
-        let vi  = vi_off + 1;
+        let vi = vi_off + 1;
         let krs = b_krs[vi];
         print!("{:<16}", format!("{}(k={krs})", b_names[vi]));
         for (ni, &(_, off)) in notes.iter().enumerate() {
@@ -296,18 +320,26 @@ fn main() {
     }
     println!();
     for vi_off in 0..3 {
-        let vi  = vi_off + 1;
+        let vi = vi_off + 1;
         let krs = b_krs[vi];
         let effective_krs = (krs * (krs + 1)) / 2; // triangular: [0,1,3,6]
         print!("{:<16}", format!("{}(k={krs})", b_names[vi]));
         for (ni, &(_, _off)) in notes.iter().enumerate() {
             let note_midi = note_midis[ni];
-            let pred  = (effective_krs as f32 * note_midi as f32 / 72.0).round();
-            let meas  = krs_meas_boost[vi_off][ni];
+            let pred = (effective_krs as f32 * note_midi as f32 / 72.0).round();
+            let meas = krs_meas_boost[vi_off][ni];
             let exp_r = 2.0_f32.powf(-pred * 0.55);
-            let mark  = if !meas.is_nan() {
-                if (meas - pred).abs() < 0.5 { "✓" } else if (meas - pred).abs() < 1.5 { "△" } else { "✗" }
-            } else { " " };
+            let mark = if !meas.is_nan() {
+                if (meas - pred).abs() < 0.5 {
+                    "✓"
+                } else if (meas - pred).abs() < 1.5 {
+                    "△"
+                } else {
+                    "✗"
+                }
+            } else {
+                " "
+            };
             print!("  {:>5.1}b({:>4.1}meas){} r={:.3}", pred, meas, mark, exp_r);
         }
         println!();
