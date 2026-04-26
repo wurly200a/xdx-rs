@@ -9,6 +9,7 @@ use xdx_core::sysex::{
     dx100_decode_1voice, dx100_decode_32voice, dx100_encode_1voice, dx100_encode_32voice,
 };
 use xdx_midi::{MidiEvent, MidiManager};
+use xdx_synth::FmEngine;
 
 // ── PC keyboard → MIDI note mapping (standard QWERTY piano layout) ────────────
 // Lower row  Z..M  : C4(60)–B4(71)   upper row  Q..U  : C5(72)–B5(83)
@@ -134,6 +135,23 @@ fn section_label(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+// ── Waveform preview data ─────────────────────────────────────────────────────
+
+const WV_WIN_MS: f32 = 10.0; // RMS window size in ms (must match render_wv_bins)
+
+#[derive(Default)]
+struct WvBins {
+    bins: Vec<f32>,
+    onset: usize,
+    peak: f32,
+    hold_bins: usize,
+}
+
+struct EgAnchor {
+    t_ms: f32,
+    level: f32, // 0.0 = silence, 1.0 = attack peak
+}
+
 // ── State enums ───────────────────────────────────────────────────────────────
 
 #[derive(PartialEq)]
@@ -196,6 +214,16 @@ struct App {
     pc_kbd_notes: std::collections::HashSet<u8>,
     voice_dirty: bool, // true → push voice to audio engine on next frame
     midi_ch: u8,       // 0-15 (displayed as 1-16)
+    wv_note: u8,
+    wv_hold_ms: u32,
+    wv_dirty: bool,
+    wv_ops: [WvBins; 4],
+    wv_final: WvBins,
+    wv_eg_ops: [Vec<EgAnchor>; 4],
+    wv_zoom: f32,
+    wv_pan: f32,
+    wv_content_w: f32,
+    wv_show_eg: bool,
 }
 
 impl App {
@@ -232,6 +260,16 @@ impl App {
             pc_kbd_notes: std::collections::HashSet::new(),
             voice_dirty: true, // push initial voice on first frame
             midi_ch: 0,
+            wv_note: 60,
+            wv_hold_ms: 3000,
+            wv_dirty: true,
+            wv_ops: Default::default(),
+            wv_final: WvBins::default(),
+            wv_eg_ops: Default::default(),
+            wv_zoom: 1.0,
+            wv_pan: 0.0,
+            wv_content_w: 800.0,
+            wv_show_eg: true,
         };
         app.start_port_scan(); // scan in background at startup
         app
@@ -270,6 +308,7 @@ impl App {
                     self.name_buf = voice.name_str();
                     self.voice = voice;
                     self.voice_dirty = true;
+                    self.wv_dirty = true;
                     self.status = format!("Opened: {}", path.display());
                     self.file_path = Some(path);
                 }
@@ -399,6 +438,18 @@ impl App {
             .ok_or_else(|| "No MIDI IN device selected (Settings > MIDI IN)".to_string())?;
         self.midi_manager.open_in(&name).map_err(|e| e.to_string())
     }
+
+    fn refresh_waveforms(&mut self) {
+        let voice = self.voice.clone();
+        let note = self.wv_note;
+        let hold_ms = self.wv_hold_ms;
+        self.wv_final = render_wv_bins(&voice, note, hold_ms);
+        for op_idx in 0..4 {
+            self.wv_ops[op_idx] = render_op_bins(&voice, op_idx, note, hold_ms);
+            self.wv_eg_ops[op_idx] = compute_eg_anchors(&voice.ops[op_idx], note, hold_ms);
+        }
+        self.wv_dirty = false;
+    }
 }
 
 impl eframe::App for App {
@@ -514,6 +565,11 @@ impl eframe::App for App {
                 audio.set_voice(self.voice.clone());
             }
             self.voice_dirty = false;
+        }
+
+        // ── Waveform preview: re-render when dirty ───────────────────────────────
+        if self.wv_dirty {
+            self.refresh_waveforms();
         }
 
         // ── PC keyboard → Softsynth + MIDI OUT ───────────────────────────────────
@@ -918,6 +974,7 @@ impl eframe::App for App {
                         if let Some(v) = self.bank.get(self.bank_sel) {
                             self.voice = v.clone();
                             self.voice_dirty = true;
+                            self.wv_dirty = true;
                             self.name_buf = self.voice.name_str();
                             self.status = format!(
                                 "Loaded {:02}: {}",
@@ -1027,10 +1084,94 @@ impl eframe::App for App {
 
             egui::ScrollArea::both().show(ui, |ui| {
                 let before = self.voice.clone();
-                show_dx100_voice(ui, &mut self.voice, &mut self.name_buf, &self.algo_textures);
+                let scope_resp = ui.scope(|ui| {
+                    show_dx100_voice(ui, &mut self.voice, &mut self.name_buf, &self.algo_textures);
+                });
+                let content_w = scope_resp.response.rect.width();
+                if content_w > 100.0 {
+                    self.wv_content_w = content_w;
+                }
                 if self.voice != before {
                     self.voice_dirty = true;
+                    self.wv_dirty = true;
                 }
+
+                ui.separator();
+
+                // Waveform preview controls
+                ui.horizontal(|ui| {
+                    ui.label(hdr("PREVIEW:"));
+                    ui.label("Note:");
+                    let note_resp =
+                        ui.add(egui::DragValue::new(&mut self.wv_note).range(0u8..=127u8));
+                    ui.label(midi_note_name(self.wv_note));
+                    if note_resp.changed() {
+                        self.wv_dirty = true;
+                    }
+                    ui.separator();
+                    ui.label("Hold:");
+                    let hold_resp =
+                        ui.add(egui::DragValue::new(&mut self.wv_hold_ms).range(100u32..=8000u32));
+                    ui.label("ms");
+                    if hold_resp.changed() {
+                        self.wv_dirty = true;
+                    }
+                    ui.separator();
+                    ui.label("Zoom:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.wv_zoom)
+                            .range(1.0f32..=16.0f32)
+                            .speed(0.05),
+                    );
+                    ui.label("x");
+                    if ui.small_button("Reset").clicked() {
+                        self.wv_zoom = 1.0;
+                        self.wv_pan = 0.0;
+                    }
+                    ui.separator();
+                    ui.checkbox(&mut self.wv_show_eg, "EG");
+                });
+
+                ui.add_space(4.0);
+
+                // Waveform panels — fixed width aligned to PL3 column (~260px for algo diagram)
+                const OP_COLORS: [Color32; 4] = [
+                    Color32::from_rgb(80, 180, 80),
+                    Color32::from_rgb(80, 160, 220),
+                    Color32::from_rgb(220, 180, 60),
+                    Color32::from_rgb(200, 100, 80),
+                ];
+                const LABEL_W: f32 = 48.0;
+                let wave_w = (self.wv_content_w - 260.0 - LABEL_W - 8.0).max(80.0);
+                let zoom = self.wv_zoom;
+                let show_eg = self.wv_show_eg;
+                for op_idx in 0..4usize {
+                    let label = format!("OP{}", op_idx + 1);
+                    // wv_pan is shared — borrow split needed
+                    let pan = &mut self.wv_pan;
+                    show_waveform(
+                        ui,
+                        &self.wv_ops[op_idx],
+                        &self.wv_eg_ops[op_idx],
+                        &label,
+                        OP_COLORS[op_idx],
+                        wave_w,
+                        zoom,
+                        pan,
+                        show_eg,
+                    );
+                }
+                show_waveform(
+                    ui,
+                    &self.wv_final,
+                    &[],
+                    "FINAL",
+                    Color32::WHITE,
+                    wave_w,
+                    zoom,
+                    &mut self.wv_pan,
+                    false,
+                );
             });
         });
     }
@@ -1276,4 +1417,275 @@ fn show_dx100_voice(
             });
         }
     }); // end outer ui.horizontal
+}
+
+// ── Waveform preview helpers ──────────────────────────────────────────────────
+
+fn midi_note_name(note: u8) -> String {
+    const NAMES: &[&str] = &[
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    let oct = (note as i32 / 12) - 1;
+    format!("{}{}", NAMES[(note % 12) as usize], oct)
+}
+
+fn render_wv_bins(voice: &Dx100Voice, note: u8, hold_ms: u32) -> WvBins {
+    const SR: f32 = 44100.0;
+    const WIN_MS: f32 = 10.0;
+    const RELEASE_MS: u32 = 1500;
+    let win = (SR * WIN_MS / 1000.0) as usize;
+    let hold_n = (SR * hold_ms as f32 / 1000.0) as usize;
+    let rel_n = (SR * RELEASE_MS as f32 / 1000.0) as usize;
+
+    let mut engine = FmEngine::new(SR);
+    engine.set_voice(voice.clone());
+    engine.note_on(note, 100);
+    let mut buf = vec![0.0f32; hold_n + rel_n];
+    if hold_n > 0 {
+        engine.render(&mut buf[..hold_n]);
+    }
+    engine.note_off(note);
+    if rel_n > 0 {
+        engine.render(&mut buf[hold_n..]);
+    }
+
+    let bins: Vec<f32> = buf
+        .chunks(win)
+        .map(|c| (c.iter().map(|s| s * s).sum::<f32>() / c.len() as f32).sqrt())
+        .collect();
+    let hold_bins = hold_n / win;
+    let peak = bins.iter().cloned().fold(0.0_f32, f32::max);
+    let onset = {
+        let thr = peak * 0.005;
+        bins.iter().position(|&r| r > thr).unwrap_or(0)
+    };
+    WvBins {
+        bins,
+        onset,
+        peak,
+        hold_bins,
+    }
+}
+
+fn render_op_bins(voice: &Dx100Voice, op_idx: usize, note: u8, hold_ms: u32) -> WvBins {
+    // Render each OP as a standalone carrier (algorithm 1, no FM, no feedback)
+    // so modulator EG shapes are also visible.
+    let mut v = voice.clone();
+    v.algorithm = 0;
+    v.feedback = 0;
+    v.ops[0] = voice.ops[op_idx].clone();
+    for i in 1..4usize {
+        v.ops[i].out_level = 0;
+    }
+    render_wv_bins(&v, note, hold_ms)
+}
+
+fn compute_eg_anchors(
+    op: &xdx_core::dx100::Dx100Operator,
+    note: u8,
+    hold_ms: u32,
+) -> Vec<EgAnchor> {
+    let krs = op.kbd_rate_scl;
+    let effective_krs = (krs * (krs + 1)) / 2;
+    let rate_boost = ((effective_krs as f32 * note as f32 / 72.0).round()) as u8;
+    let ar = (op.ar + rate_boost).min(31);
+    let d1r = (op.d1r + rate_boost).min(31);
+    let d2r = (op.d2r + rate_boost).min(31);
+    let rr = (op.rr + rate_boost).min(15);
+
+    let d1l: f32 = if op.d1l == 0 {
+        0.0
+    } else if op.d1l >= 15 {
+        1.0
+    } else {
+        2.0f32.powf((op.d1l as f32 - 15.0) * 0.5)
+    };
+
+    // Half-life in ms for a decay rate; returns f32::INFINITY when rate==0.
+    let hl_ms = |rate: u8, max: u8, coeff: f32| -> f32 {
+        if rate == 0 {
+            f32::INFINITY
+        } else {
+            coeff * 2.0f32.powf((max - rate) as f32 * 0.55) * 1000.0
+        }
+    };
+
+    let mut pts = vec![EgAnchor {
+        t_ms: 0.0,
+        level: 0.0,
+    }];
+    let hold_f = hold_ms as f32;
+
+    if ar == 0 {
+        return pts; // no attack — stays at 0
+    }
+    let t_atk = 0.000085 * 2.0f32.powf((31 - ar) as f32 * 0.55) * 1000.0;
+    if t_atk >= hold_f {
+        pts.push(EgAnchor {
+            t_ms: hold_f,
+            level: (hold_f / t_atk).min(1.0),
+        });
+        return pts;
+    }
+    pts.push(EgAnchor {
+        t_ms: t_atk,
+        level: 1.0,
+    });
+
+    // D1 decay: 1.0 → d1l
+    let t_hl_d1 = hl_ms(d1r, 31, 0.000092);
+    let d1_dur = if t_hl_d1.is_infinite() || d1l >= 1.0 {
+        f32::INFINITY
+    } else {
+        (1.0f32 / d1l.max(1e-7)).log2() * t_hl_d1
+    };
+    let t_d1_end = t_atk + d1_dur;
+
+    let level_at_noff: f32;
+    if t_d1_end <= hold_f {
+        // D1 finished before note-off
+        pts.push(EgAnchor {
+            t_ms: t_d1_end,
+            level: d1l,
+        });
+        // D2 decay from d1l until note-off
+        let t_hl_d2 = hl_ms(d2r, 31, 0.000092);
+        let d2_elapsed = hold_f - t_d1_end;
+        level_at_noff = if t_hl_d2.is_infinite() {
+            d1l
+        } else {
+            d1l * 0.5f32.powf(d2_elapsed / t_hl_d2)
+        };
+    } else {
+        // D1 still decaying at note-off
+        let d1_elapsed = hold_f - t_atk;
+        level_at_noff = if t_hl_d1.is_infinite() {
+            1.0
+        } else {
+            0.5f32.powf(d1_elapsed / t_hl_d1)
+        };
+    }
+
+    // Note-off
+    pts.push(EgAnchor {
+        t_ms: hold_f,
+        level: level_at_noff,
+    });
+
+    // Release tail — show for the full 1500 ms release window
+    const RELEASE_WIN_MS: f32 = 1500.0;
+    let t_hl_rr = hl_ms(rr, 15, 0.0014);
+    let level_end = if t_hl_rr.is_infinite() {
+        level_at_noff
+    } else {
+        level_at_noff * 0.5f32.powf(RELEASE_WIN_MS / t_hl_rr)
+    };
+    pts.push(EgAnchor {
+        t_ms: hold_f + RELEASE_WIN_MS,
+        level: level_end,
+    });
+
+    pts
+}
+
+fn show_waveform(
+    ui: &mut egui::Ui,
+    data: &WvBins,
+    eg: &[EgAnchor],
+    label: &str,
+    color: Color32,
+    wave_w: f32,
+    zoom: f32,
+    pan_bins: &mut f32,
+    show_eg: bool,
+) {
+    const BG: Color32 = Color32::from_rgb(18, 18, 28);
+    const BORDER: Color32 = Color32::from_rgb(50, 55, 70);
+    const NOFF: Color32 = Color32::from_rgba_premultiplied(112, 112, 41, 130);
+    const WV_H: f32 = 68.0;
+    const LABEL_W: f32 = 48.0;
+
+    let total = data.bins.len().saturating_sub(data.onset);
+    let visible = ((total as f32 / zoom.max(1.0)).ceil() as usize).max(2);
+    let max_pan = (total.saturating_sub(visible)) as f32;
+    *pan_bins = pan_bins.clamp(0.0, max_pan);
+    let start = pan_bins.floor() as usize;
+
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(LABEL_W);
+            ui.set_min_height(WV_H);
+            ui.add_space(WV_H / 2.0 - 8.0);
+            ui.label(RichText::new(label).small().strong().color(color));
+        });
+
+        let (response, painter) =
+            ui.allocate_painter(egui::vec2(wave_w, WV_H), egui::Sense::drag());
+        let rect = response.rect;
+        painter.rect_filled(rect, 2.0, BG);
+        painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, BORDER));
+
+        if response.dragged() {
+            let delta = -response.drag_delta().x / wave_w * visible as f32;
+            *pan_bins = (*pan_bins + delta).clamp(0.0, max_pan);
+        }
+
+        if total < 2 || data.peak < 1e-7 {
+            return;
+        }
+
+        let mt = rect.height() * 0.05;
+        let uh = rect.height() * 0.90;
+        let to_x = |n: f32| rect.left() + (n / visible as f32).clamp(0.0, 1.0) * rect.width();
+        let to_y = |v: f32| rect.top() + mt + (1.0 - (v / data.peak).clamp(0.0, 1.0)) * uh;
+
+        // Note-off line
+        let noff_disp = data
+            .hold_bins
+            .saturating_sub(data.onset)
+            .saturating_sub(start);
+        if noff_disp < visible {
+            painter.line_segment(
+                [
+                    egui::pos2(to_x(noff_disp as f32), rect.top()),
+                    egui::pos2(to_x(noff_disp as f32), rect.bottom()),
+                ],
+                egui::Stroke::new(1.0, NOFF),
+            );
+        }
+
+        // RMS amplitude envelope
+        let end = (start + visible).min(total);
+        let pts: Vec<egui::Pos2> = (start..end)
+            .enumerate()
+            .map(|(i, b)| egui::pos2(to_x(i as f32), to_y(data.bins[data.onset + b])))
+            .collect();
+        if pts.len() >= 2 {
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, color)));
+        }
+
+        // Theoretical EG overlay
+        if show_eg && eg.len() >= 2 {
+            let eg_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 170);
+            let anchor_to_pos = |a: &EgAnchor| -> Option<egui::Pos2> {
+                let raw_bin = a.t_ms / WV_WIN_MS;
+                let disp = raw_bin - data.onset as f32 - start as f32;
+                if disp < -0.5 || disp > visible as f32 + 0.5 {
+                    return None;
+                }
+                let x = rect.left() + (disp / visible as f32).clamp(0.0, 1.0) * rect.width();
+                let y = rect.top() + mt + (1.0 - a.level.clamp(0.0, 1.0)) * uh;
+                Some(egui::pos2(x, y))
+            };
+            let eg_pts: Vec<egui::Pos2> = eg.iter().filter_map(anchor_to_pos).collect();
+            if eg_pts.len() >= 2 {
+                painter.add(egui::Shape::line(eg_pts, egui::Stroke::new(1.0, eg_color)));
+            }
+            for a in eg.iter() {
+                if let Some(p) = anchor_to_pos(a) {
+                    painter.circle_filled(p, 2.5, eg_color);
+                }
+            }
+        }
+    });
 }
