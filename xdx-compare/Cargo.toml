@@ -20,6 +20,10 @@ path = "src/record_eg_bank.rs"
 name = "analyze-kbs-calib"
 path = "src/analyze_kbs_calib.rs"
 
+[[bin]]
+name = "analyze-lfo-calib"
+path = "src/analyze_lfo_calib.rs"
+
 [dependencies]
 xdx-core  = { path = "../xdx-core" }
 xdx-midi  = { path = "../xdx-midi", default-features = false }
