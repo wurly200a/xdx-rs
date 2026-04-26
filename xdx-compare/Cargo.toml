@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "record-eg-bank"
 path = "src/record_eg_bank.rs"
 
+[[bin]]
+name = "analyze-kbs-calib"
+path = "src/analyze_kbs_calib.rs"
+
 [dependencies]
 xdx-core  = { path = "../xdx-core" }
 xdx-midi  = { path = "../xdx-midi", default-features = false }
