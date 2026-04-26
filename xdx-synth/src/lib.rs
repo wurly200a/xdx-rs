@@ -136,6 +136,144 @@ fn rate_mul(rate: u8, max_rate: u8, coeff: f32, sr: f32) -> f32 {
     (-std::f32::consts::LN_2 / (t * sr)).exp()
 }
 
+// ── LFO ──────────────────────────────────────────────────────────────────────
+
+// DX100 hardware-measured LFO speed: piecewise linear between 7 calibration points.
+// speed=0 extrapolated from "period ~16s" note in recordings (undetectable in 8s window).
+const LFO_SPEED_TABLE: [(f32, f32); 7] = [
+    (0.0, 0.063),
+    (16.0, 1.511),
+    (33.0, 6.183),
+    (50.0, 13.214),
+    (66.0, 24.849),
+    (83.0, 39.253),
+    (99.0, 52.946),
+];
+
+fn lfo_speed_hz(speed: u8) -> f32 {
+    let s = speed as f32;
+    let n = LFO_SPEED_TABLE.len();
+    if s <= LFO_SPEED_TABLE[0].0 {
+        return LFO_SPEED_TABLE[0].1;
+    }
+    if s >= LFO_SPEED_TABLE[n - 1].0 {
+        return LFO_SPEED_TABLE[n - 1].1;
+    }
+    for i in 1..n {
+        if s <= LFO_SPEED_TABLE[i].0 {
+            let (s0, h0) = LFO_SPEED_TABLE[i - 1];
+            let (s1, h1) = LFO_SPEED_TABLE[i];
+            let t = (s - s0) / (s1 - s0);
+            return h0 + t * (h1 - h0);
+        }
+    }
+    LFO_SPEED_TABLE[n - 1].1
+}
+
+// DX100 lfo_delay → samples of silence before LFO becomes audible.
+// Encoding: a = (16 + (delay & 15)) << (1 + (delay >> 4))
+// Measured onset: onset_ms ≈ 1.406 × a^1.166 (3 DX100 data points; ±30% accuracy).
+fn lfo_delay_samples(delay: u8, sr: f32) -> u32 {
+    if delay == 0 {
+        return 0;
+    }
+    let a = ((16 + (delay & 15) as u32) << (1 + (delay >> 4) as u32)) as f32;
+    let ms = 1.406_f32 * a.powf(1.166);
+    (ms / 1000.0 * sr) as u32
+}
+
+// PMS 0-7 → max pitch deviation in cents at PMD=99, LFO=+1.0.
+// Anchored at PMS=3→20¢ and PMS=7→700¢ from DX100 hardware measurements.
+// Intermediate values interpolated geometrically (~2.43× per step).
+const PMS_CENTS: [f32; 8] = [0.0, 3.4, 8.2, 20.0, 48.6, 118.0, 287.0, 700.0];
+
+// AMS 0-3 → amplitude modulation sensitivity scale.
+// AMS=1..3 all saturate at AMD=99 (≈48 dB in DX100 recordings).
+// Doubling per step matches DX standard; relative ratios unverified for DX100.
+const AMS_SCALE: [f32; 4] = [0.0, 1.0, 2.0, 4.0];
+
+#[derive(Clone)]
+struct Lfo {
+    phase: f32,
+    hz: f32,
+    amplitude: f32, // 0.0..1.0, ramps up from zero after delay ends
+    elapsed: u32,   // samples elapsed since note-on
+    delay_samples: u32,
+    ramp_samples: u32, // linear ramp-up duration after delay; 500ms when delay > 0
+    s_h_value: f32,    // S&H held value
+}
+
+impl Lfo {
+    fn new(voice: &Dx100Voice, sr: f32) -> Self {
+        let hz = lfo_speed_hz(voice.lfo_speed);
+        let delay_samples = lfo_delay_samples(voice.lfo_delay, sr);
+        // 500ms linear ramp after delay; no ramp when delay=0 (start at full amplitude).
+        let ramp_samples = if delay_samples > 0 {
+            (0.5 * sr) as u32
+        } else {
+            0
+        };
+        Self {
+            phase: 0.0,
+            hz,
+            amplitude: if delay_samples == 0 { 1.0 } else { 0.0 },
+            elapsed: 0,
+            delay_samples,
+            ramp_samples,
+            s_h_value: 0.0,
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, sr: f32, wave: u8) -> f32 {
+        self.elapsed = self.elapsed.saturating_add(1);
+        if self.elapsed <= self.delay_samples {
+            self.amplitude = 0.0;
+        } else {
+            let after = self.elapsed - self.delay_samples;
+            self.amplitude = if self.ramp_samples > 0 {
+                (after as f32 / self.ramp_samples as f32).min(1.0)
+            } else {
+                1.0
+            };
+        }
+
+        self.phase += self.hz / sr;
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+            if wave == 3 {
+                // LCG hash of elapsed for S&H pseudo-random output
+                let h = self
+                    .elapsed
+                    .wrapping_mul(2891336453)
+                    .wrapping_add(1640531527);
+                self.s_h_value = (h as f32 / u32::MAX as f32) * 2.0 - 1.0;
+            }
+        }
+
+        let raw = match wave {
+            0 => 1.0 - 2.0 * self.phase, // SAW descending
+            1 => {
+                if self.phase < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            } // SQU
+            2 => {
+                // TRI
+                if self.phase < 0.5 {
+                    4.0 * self.phase - 1.0
+                } else {
+                    3.0 - 4.0 * self.phase
+                }
+            }
+            _ => self.s_h_value, // S&H
+        };
+        raw * self.amplitude
+    }
+}
+
 // ── Operator ──────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -143,8 +281,9 @@ struct Operator {
     phase: f64,
     env: Envelope,
     // Computed at note-on
-    freq: f32, // absolute frequency (Hz)
-    amp: f32,  // 0..1 linear from out_level
+    freq: f32,        // absolute frequency (Hz)
+    amp: f32,         // 0..1 linear from out_level
+    amp_mod_en: bool, // true → operator output is attenuated by LFO AM
 }
 
 impl Operator {
@@ -154,14 +293,16 @@ impl Operator {
             env: Envelope::new(),
             freq: 0.0,
             amp: 0.0,
+            amp_mod_en: false,
         }
     }
 
     /// Advance phase and return output sample (in radians for FM modulation).
     /// `mod_input` is total phase modulation from upstream operators (radians).
+    /// `pitch_ratio` scales frequency from LFO pitch modulation.
     #[inline]
-    fn tick(&mut self, sr: f32, mod_input: f32) -> f32 {
-        self.phase += self.freq as f64 / sr as f64;
+    fn tick(&mut self, sr: f32, mod_input: f32, pitch_ratio: f32) -> f32 {
+        self.phase += (self.freq * pitch_ratio) as f64 / sr as f64;
         if self.phase >= 1.0 {
             self.phase -= 1.0;
         }
@@ -178,6 +319,7 @@ struct Note {
     ops: [Operator; 4], // ops[0]=OP1(feedback), ops[1]=OP2, ops[2]=OP3, ops[3]=OP4
     fb_prev: f32,       // OP4 output at t-1 (DX100: feedback is always on OP4)
     fb_prev2: f32,      // OP4 output at t-2
+    lfo: Lfo,
 }
 
 impl Note {
@@ -204,12 +346,14 @@ impl Note {
             let vel_factor = 1.0 - (p.key_vel_sens as f32 / 7.0) * (1.0 - vel_scale);
             op.amp = level_to_amp(p.out_level.saturating_sub(kls_reduction)) * vel_factor;
             op.env.init(p, sr, midi_note);
+            op.amp_mod_en = p.amp_mod_en != 0;
         }
         Note {
             midi_note,
             ops,
             fb_prev: 0.0,
             fb_prev2: 0.0,
+            lfo: Lfo::new(voice, sr),
         }
     }
 
@@ -224,7 +368,35 @@ impl Note {
     }
 
     #[inline]
-    fn render_sample(&mut self, algo: u8, fb_depth: f32, sr: f32) -> f32 {
+    fn render_sample(&mut self, algo: u8, fb_depth: f32, sr: f32, voice: &Dx100Voice) -> f32 {
+        let lfo_out = self.lfo.tick(sr, voice.lfo_wave);
+
+        // Pitch modulation: uniform frequency shift across all operators.
+        let pitch_cents =
+            PMS_CENTS[voice.pitch_mod_sens as usize & 7] * (voice.lfo_pmd as f32 / 99.0) * lfo_out;
+        let pitch_ratio = 2.0_f32.powf(pitch_cents / 1200.0);
+
+        // Amplitude modulation: LFO normalised to 0..1 (negative half = no attenuation).
+        // am_on = attenuation factor for ops with amp_mod_en; 1.0 = no effect.
+        let lfo_am = (lfo_out * 0.5 + 0.5).max(0.0);
+        let am_depth = voice.lfo_amd as f32 / 99.0 * AMS_SCALE[(voice.amp_mod_sens as usize) & 3];
+        let am_on = (1.0 - lfo_am * am_depth).max(0.0);
+
+        // Pre-read amp_mod_en flags before mutable operator borrows.
+        let am_en = [
+            self.ops[0].amp_mod_en,
+            self.ops[1].amp_mod_en,
+            self.ops[2].amp_mod_en,
+            self.ops[3].amp_mod_en,
+        ];
+        let am = |en: bool| -> f32 {
+            if en {
+                am_on
+            } else {
+                1.0
+            }
+        };
+
         // Evaluate operators in modulator-first order for each algorithm.
         // ops[0]=OP1, [1]=OP2, [2]=OP3, [3]=OP4
         //
@@ -232,91 +404,100 @@ impl Note {
         // Averages the last two OP4 outputs to stabilise high-feedback chaos.
         // Modulator outputs are scaled by TAU (≈±2π rad at full level) before
         // being added to the carrier phase, matching Yamaha hardware.
+        // fb_prev tracks the pre-AM OP4 value to keep the feedback loop stable.
         let fb_mod = (self.fb_prev + self.fb_prev2) * 0.5 * fb_depth;
 
         match algo {
             // ── 1 carrier ──────────────────────────────────────────────────
             // Alg 0: OP4(fb)→OP3→OP2→OP1(C)
             0 => {
-                let o4 = self.ops[3].tick(sr, fb_mod);
-                let o3 = self.ops[2].tick(sr, o4 * TAU);
-                let o2 = self.ops[1].tick(sr, o3 * TAU);
-                let o1 = self.ops[0].tick(sr, o2 * TAU);
+                let o4r = self.ops[3].tick(sr, fb_mod, pitch_ratio);
+                let o4 = o4r * am(am_en[3]);
+                let o3 = self.ops[2].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[2]);
+                let o2 = self.ops[1].tick(sr, o3 * TAU, pitch_ratio) * am(am_en[1]);
+                let o1 = self.ops[0].tick(sr, o2 * TAU, pitch_ratio) * am(am_en[0]);
                 self.fb_prev2 = self.fb_prev;
-                self.fb_prev = o4;
+                self.fb_prev = o4r;
                 o1
             }
             // Alg 1: [OP4(fb)→OP3, OP2] → OP1(C)
             1 => {
-                let o4 = self.ops[3].tick(sr, fb_mod);
-                let o2 = self.ops[1].tick(sr, 0.0);
-                let o3 = self.ops[2].tick(sr, o4 * TAU);
-                let o1 = self.ops[0].tick(sr, (o3 + o2) * TAU);
+                let o4r = self.ops[3].tick(sr, fb_mod, pitch_ratio);
+                let o4 = o4r * am(am_en[3]);
+                let o2 = self.ops[1].tick(sr, 0.0, pitch_ratio) * am(am_en[1]);
+                let o3 = self.ops[2].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[2]);
+                let o1 = self.ops[0].tick(sr, (o3 + o2) * TAU, pitch_ratio) * am(am_en[0]);
                 self.fb_prev2 = self.fb_prev;
-                self.fb_prev = o4;
+                self.fb_prev = o4r;
                 o1
             }
             // Alg 2: OP4(fb)→[OP3+OP2]→OP1(C)
             2 => {
-                let o4 = self.ops[3].tick(sr, fb_mod);
-                let o3 = self.ops[2].tick(sr, o4 * TAU);
-                let o2 = self.ops[1].tick(sr, o4 * TAU);
-                let o1 = self.ops[0].tick(sr, (o3 + o2) * TAU);
+                let o4r = self.ops[3].tick(sr, fb_mod, pitch_ratio);
+                let o4 = o4r * am(am_en[3]);
+                let o3 = self.ops[2].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[2]);
+                let o2 = self.ops[1].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[1]);
+                let o1 = self.ops[0].tick(sr, (o3 + o2) * TAU, pitch_ratio) * am(am_en[0]);
                 self.fb_prev2 = self.fb_prev;
-                self.fb_prev = o4;
+                self.fb_prev = o4r;
                 o1
             }
             // Alg 3: [OP4(fb)+OP3+OP2]→OP1(C)
             3 => {
-                let o4 = self.ops[3].tick(sr, fb_mod);
-                let o3 = self.ops[2].tick(sr, 0.0);
-                let o2 = self.ops[1].tick(sr, 0.0);
-                let o1 = self.ops[0].tick(sr, (o4 + o3 + o2) * TAU);
+                let o4r = self.ops[3].tick(sr, fb_mod, pitch_ratio);
+                let o4 = o4r * am(am_en[3]);
+                let o3 = self.ops[2].tick(sr, 0.0, pitch_ratio) * am(am_en[2]);
+                let o2 = self.ops[1].tick(sr, 0.0, pitch_ratio) * am(am_en[1]);
+                let o1 = self.ops[0].tick(sr, (o4 + o3 + o2) * TAU, pitch_ratio) * am(am_en[0]);
                 self.fb_prev2 = self.fb_prev;
-                self.fb_prev = o4;
+                self.fb_prev = o4r;
                 o1
             }
             // ── 2 carriers ─────────────────────────────────────────────────
             // Alg 4: [OP4(fb)→OP3(C)] + [OP2→OP1(C)]
             4 => {
-                let o4 = self.ops[3].tick(sr, fb_mod);
-                let o2 = self.ops[1].tick(sr, 0.0);
-                let o3 = self.ops[2].tick(sr, o4 * TAU);
-                let o1 = self.ops[0].tick(sr, o2 * TAU);
+                let o4r = self.ops[3].tick(sr, fb_mod, pitch_ratio);
+                let o4 = o4r * am(am_en[3]);
+                let o2 = self.ops[1].tick(sr, 0.0, pitch_ratio) * am(am_en[1]);
+                let o3 = self.ops[2].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[2]);
+                let o1 = self.ops[0].tick(sr, o2 * TAU, pitch_ratio) * am(am_en[0]);
                 self.fb_prev2 = self.fb_prev;
-                self.fb_prev = o4;
+                self.fb_prev = o4r;
                 (o3 + o1) * 0.5
             }
             // ── 3 carriers ─────────────────────────────────────────────────
             // Alg 5: OP4(fb)→[OP3(C)+OP2(C)+OP1(C)]
             5 => {
-                let o4 = self.ops[3].tick(sr, fb_mod);
-                let o3 = self.ops[2].tick(sr, o4 * TAU);
-                let o2 = self.ops[1].tick(sr, o4 * TAU);
-                let o1 = self.ops[0].tick(sr, o4 * TAU);
+                let o4r = self.ops[3].tick(sr, fb_mod, pitch_ratio);
+                let o4 = o4r * am(am_en[3]);
+                let o3 = self.ops[2].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[2]);
+                let o2 = self.ops[1].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[1]);
+                let o1 = self.ops[0].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[0]);
                 self.fb_prev2 = self.fb_prev;
-                self.fb_prev = o4;
+                self.fb_prev = o4r;
                 (o3 + o2 + o1) / 3.0
             }
             // Alg 6: [OP4(fb)→OP3(C)] + OP2(C) + OP1(C)
             6 => {
-                let o4 = self.ops[3].tick(sr, fb_mod);
-                let o3 = self.ops[2].tick(sr, o4 * TAU);
-                let o2 = self.ops[1].tick(sr, 0.0);
-                let o1 = self.ops[0].tick(sr, 0.0);
+                let o4r = self.ops[3].tick(sr, fb_mod, pitch_ratio);
+                let o4 = o4r * am(am_en[3]);
+                let o3 = self.ops[2].tick(sr, o4 * TAU, pitch_ratio) * am(am_en[2]);
+                let o2 = self.ops[1].tick(sr, 0.0, pitch_ratio) * am(am_en[1]);
+                let o1 = self.ops[0].tick(sr, 0.0, pitch_ratio) * am(am_en[0]);
                 self.fb_prev2 = self.fb_prev;
-                self.fb_prev = o4;
+                self.fb_prev = o4r;
                 (o3 + o2 + o1) / 3.0
             }
             // ── 4 carriers (pure additive) ──────────────────────────────────
             // Alg 7: OP4(fb,C)+OP3(C)+OP2(C)+OP1(C)
             _ => {
-                let o4 = self.ops[3].tick(sr, fb_mod);
-                let o3 = self.ops[2].tick(sr, 0.0);
-                let o2 = self.ops[1].tick(sr, 0.0);
-                let o1 = self.ops[0].tick(sr, 0.0);
+                let o4r = self.ops[3].tick(sr, fb_mod, pitch_ratio);
+                let o4 = o4r * am(am_en[3]);
+                let o3 = self.ops[2].tick(sr, 0.0, pitch_ratio) * am(am_en[2]);
+                let o2 = self.ops[1].tick(sr, 0.0, pitch_ratio) * am(am_en[1]);
+                let o1 = self.ops[0].tick(sr, 0.0, pitch_ratio) * am(am_en[0]);
                 self.fb_prev2 = self.fb_prev;
-                self.fb_prev = o4;
+                self.fb_prev = o4r;
                 (o4 + o3 + o2 + o1) * 0.25
             }
         }
@@ -371,11 +552,12 @@ impl FmEngine {
         let algo = self.voice.algorithm;
         let fb_depth = self.fb_depth;
         let sr = self.sample_rate;
+        let voice = &self.voice;
 
         for sample in buf.iter_mut() {
             let mut out = 0.0_f32;
             for note in &mut self.notes {
-                out += note.render_sample(algo, fb_depth, sr);
+                out += note.render_sample(algo, fb_depth, sr, voice);
             }
             *sample = out;
         }
