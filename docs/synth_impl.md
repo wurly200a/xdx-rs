@@ -4,7 +4,7 @@
 > プロジェクトの原則は英語または英語＋日本語併記ですが、このファイルは  
 > 実装完了後に削除予定の作業メモのため日本語のままとしています。
 
-最終更新: 2026-04-26 (kbd_lev_scl / kbd_rate_scl キャリブ完了)
+最終更新: 2026-04-26 (ar smoothstep S字カーブ実装)
 
 ---
 
@@ -14,7 +14,7 @@
 
 | パラメータ | 型 | 実装箇所 | 状態 | 備考 |
 |---|---|---|---|---|
-| `ar` Attack Rate | 0-31 | `rate_inc(op.ar, 31, sr)` | ✅ | キャリブ済 |
+| `ar` Attack Rate | 0-31 | `rate_inc_t` → smoothstep S-curve | ✅ | キャリブ済・S字カーブ実装 |
 | `d1r` Decay1 Rate | 0-31 | `rate_mul(op.d1r, 31, 0.000092, sr)` | ✅ | キャリブ済 |
 | `d2r` Decay2 Rate | 0-31 | `rate_mul(op.d2r, 31, 0.000092, sr)` | ✅ | キャリブ済 |
 | `rr` Release Rate | 0-15 | `rate_mul(op.rr, 15, 0.0014, sr)` | ✅ | キャリブ済 |

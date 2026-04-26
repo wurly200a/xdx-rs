@@ -14,15 +14,18 @@ enum Stage {
     Off,
 }
 
+// DX100 EG attack uses a smoothstep S-curve: slow start → fast middle → slow near peak.
+// Internally tracks normalised time ar_t ∈ [0, 1]; amplitude = smoothstep(ar_t).
 #[derive(Clone)]
 struct Envelope {
     stage: Stage,
-    level: f32,   // 0.0..=1.0 linear amplitude (output)
-    ar_inc: f32,  // per-sample linear increment (attack)
-    d1r_mul: f32, // per-sample exponential multiplier (decay1)
-    d2r_mul: f32, // per-sample exponential multiplier (decay2)
-    rr_mul: f32,  // per-sample exponential multiplier (release)
-    d1l: f32,     // Decay-1 target level (linear, log-mapped)
+    level: f32,     // 0.0..=1.0 linear amplitude (output)
+    ar_inc_t: f32,  // per-sample increment to normalised attack time
+    ar_t: f32,      // normalised attack time 0..=1
+    d1r_mul: f32,   // per-sample exponential multiplier (decay1)
+    d2r_mul: f32,   // per-sample exponential multiplier (decay2)
+    rr_mul: f32,    // per-sample exponential multiplier (release)
+    d1l: f32,       // Decay-1 target level (linear, log-mapped)
 }
 
 impl Envelope {
@@ -30,7 +33,8 @@ impl Envelope {
         Self {
             stage: Stage::Off,
             level: 0.0,
-            ar_inc: 0.0,
+            ar_inc_t: 0.0,
+            ar_t: 0.0,
             d1r_mul: 1.0,
             d2r_mul: 1.0,
             rr_mul: 1.0,
@@ -47,7 +51,8 @@ impl Envelope {
         let effective_krs = (op.kbd_rate_scl * (op.kbd_rate_scl + 1)) / 2; // 0,1,3,6
         let rate_boost = (effective_krs as f32 * midi_note as f32 / 72.0).round() as u8;
 
-        self.ar_inc = rate_inc((op.ar + rate_boost).min(31), 31, sr);
+        self.ar_inc_t = rate_inc_t((op.ar + rate_boost).min(31), 31, sr);
+        self.ar_t = 0.0;
         self.d1r_mul = rate_mul((op.d1r + rate_boost).min(31), 31, 0.000092, sr);
         self.d2r_mul = rate_mul((op.d2r + rate_boost).min(31), 31, 0.000092, sr);
         self.rr_mul = rate_mul((op.rr + rate_boost).min(15), 15, 0.0014, sr);
@@ -73,9 +78,14 @@ impl Envelope {
     fn tick(&mut self) -> f32 {
         match self.stage {
             Stage::Attack => {
-                self.level = (self.level + self.ar_inc).min(1.0);
-                if self.level >= 1.0 {
-                    self.stage = Stage::Decay1;
+                if self.ar_inc_t > 0.0 {
+                    self.ar_t = (self.ar_t + self.ar_inc_t).min(1.0);
+                    // smoothstep: level = 3t² - 2t³  (slow start, fast middle, slow end)
+                    self.level = self.ar_t * self.ar_t * (3.0 - 2.0 * self.ar_t);
+                    if self.ar_t >= 1.0 {
+                        self.level = 1.0;
+                        self.stage = Stage::Decay1;
+                    }
                 }
             }
             Stage::Decay1 => {
@@ -106,9 +116,9 @@ impl Envelope {
     }
 }
 
-// Attack: linear increment per sample.  rate=max → ~0.085 ms; rate=0 → infinite.
-// Coefficient calibrated from real DX100 hardware: AR=20 → onset(90%) ≈ 5ms.
-fn rate_inc(rate: u8, max_rate: u8, sr: f32) -> f32 {
+// Attack: per-sample increment to normalised attack time (smoothstep S-curve).
+// t = full attack duration; calibrated from DX100 hardware: AR=20 → atk90 ≈ 5ms.
+fn rate_inc_t(rate: u8, max_rate: u8, sr: f32) -> f32 {
     if rate == 0 {
         return 0.0;
     }
