@@ -138,10 +138,13 @@ fn rate_mul(rate: u8, max_rate: u8, coeff: f32, sr: f32) -> f32 {
 
 // ── LFO ──────────────────────────────────────────────────────────────────────
 
-// DX100 hardware-measured LFO speed: piecewise linear between 7 calibration points.
+// DX100 hardware-measured LFO speed: piecewise linear between calibration points.
 // speed=0 extrapolated from "period ~16s" note in recordings (undetectable in 8s window).
-const LFO_SPEED_TABLE: [(f32, f32); 7] = [
+// speed=5 estimated: HW shows ~4× fewer oscillations than linear interpolation predicts
+//   (PMD50_S7 comparison, hold=8s); ~0.13 Hz. Needs precise re-measurement.
+const LFO_SPEED_TABLE: [(f32, f32); 8] = [
     (0.0, 0.063),
+    (5.0, 0.13), // estimated; linear interpolation overshoots ~4×
     (16.0, 1.511),
     (33.0, 6.183),
     (50.0, 13.214),
@@ -187,10 +190,10 @@ fn lfo_delay_samples(delay: u8, sr: f32) -> u32 {
 // Intermediate values interpolated geometrically (~2.43× per step).
 const PMS_CENTS: [f32; 8] = [0.0, 3.4, 8.2, 20.0, 48.6, 118.0, 287.0, 700.0];
 
-// AMS 0-3 → amplitude modulation sensitivity scale.
-// AMS=1..3 all saturate at AMD=99 (≈48 dB in DX100 recordings).
-// Doubling per step matches DX standard; relative ratios unverified for DX100.
-const AMS_SCALE: [f32; 4] = [0.0, 1.0, 2.0, 4.0];
+// AMS 0-3 → max AM attenuation depth in dB at AMD=99, LFO peak (+1.0).
+// AMS=1..3 all hit the ≈48 dB noise floor at AMD=99 (saturated); ratios
+// between steps are unverified at lower AMD and assumed to double each step.
+const AMS_DB: [f32; 4] = [0.0, 48.0, 96.0, 192.0];
 
 #[derive(Clone)]
 struct Lfo {
@@ -213,8 +216,16 @@ impl Lfo {
         } else {
             0
         };
+        // SYNC=1 resets LFO phase at note-on.
+        // DX100 TRI starts at lfo_out=0 (center, ascending) → phase=0.25.
+        // SAW/SQU start at lfo_out=+1 (positive peak) → phase=0.0.
+        let phase = if voice.lfo_sync != 0 && voice.lfo_wave == 2 {
+            0.25
+        } else {
+            0.0
+        };
         Self {
-            phase: 0.0,
+            phase,
             hz,
             amplitude: if delay_samples == 0 { 1.0 } else { 0.0 },
             elapsed: 0,
@@ -376,11 +387,12 @@ impl Note {
             PMS_CENTS[voice.pitch_mod_sens as usize & 7] * (voice.lfo_pmd as f32 / 99.0) * lfo_out;
         let pitch_ratio = 2.0_f32.powf(pitch_cents / 1200.0);
 
-        // Amplitude modulation: LFO normalised to 0..1 (negative half = no attenuation).
-        // am_on = attenuation factor for ops with amp_mod_en; 1.0 = no effect.
-        let lfo_am = (lfo_out * 0.5 + 0.5).max(0.0);
-        let am_depth = voice.lfo_amd as f32 / 99.0 * AMS_SCALE[(voice.amp_mod_sens as usize) & 3];
-        let am_on = (1.0 - lfo_am * am_depth).max(0.0);
+        // Amplitude modulation: LFO remapped to 0..1 (negative half = no attenuation).
+        // Log-domain AM matches DX100 hardware: all AMS values saturate at ≈48 dB at AMD=99.
+        let lfo_am = lfo_out * 0.5 + 0.5;
+        let attenuation_db =
+            lfo_am * (voice.lfo_amd as f32 / 99.0) * AMS_DB[(voice.amp_mod_sens as usize) & 3];
+        let am_on = 10.0_f32.powf(-attenuation_db / 20.0);
 
         // Pre-read amp_mod_en flags before mutable operator borrows.
         let am_en = [
