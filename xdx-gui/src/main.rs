@@ -1145,7 +1145,18 @@ impl eframe::App for App {
                 let wave_w = (self.wv_content_w - 260.0 - LABEL_W - 8.0).max(80.0);
                 let zoom = self.wv_zoom;
                 let show_eg = self.wv_show_eg;
-                for op_idx in 0..4usize {
+                show_waveform(
+                    ui,
+                    &self.wv_final,
+                    &[],
+                    "FINAL",
+                    Color32::WHITE,
+                    wave_w,
+                    zoom,
+                    &mut self.wv_pan,
+                    false,
+                );
+                for op_idx in (0..4usize).rev() {
                     let label = format!("OP{}", op_idx + 1);
                     // wv_pan is shared — borrow split needed
                     let pan = &mut self.wv_pan;
@@ -1161,17 +1172,6 @@ impl eframe::App for App {
                         show_eg,
                     );
                 }
-                show_waveform(
-                    ui,
-                    &self.wv_final,
-                    &[],
-                    "FINAL",
-                    Color32::WHITE,
-                    wave_w,
-                    zoom,
-                    &mut self.wv_pan,
-                    false,
-                );
             });
         });
     }
