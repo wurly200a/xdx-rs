@@ -578,6 +578,20 @@ impl FmEngine {
     }
 }
 
+/// Render raw LFO output for `hold_samples + release_samples` ticks.
+/// Returns values in –1.0..+1.0 scaled by the delay/ramp envelope.
+pub fn render_lfo(
+    voice: &Dx100Voice,
+    sr: f32,
+    hold_samples: usize,
+    release_samples: usize,
+) -> Vec<f32> {
+    let mut lfo = Lfo::new(voice, sr);
+    (0..hold_samples + release_samples)
+        .map(|_| lfo.tick(sr, voice.lfo_wave))
+        .collect()
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn midi_to_hz(note: u8, transpose: u8) -> f32 {
