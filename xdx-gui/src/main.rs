@@ -138,6 +138,7 @@ fn section_label(ui: &mut egui::Ui, text: &str) {
 // ── Waveform preview data ─────────────────────────────────────────────────────
 
 const WV_WIN_MS: f32 = 10.0; // RMS window size in ms (must match render_wv_bins)
+const SCOPE_W: f32 = 120.0; // oscilloscope column width in pixels
 
 #[derive(Default)]
 struct WvBins {
@@ -222,6 +223,8 @@ struct App {
     wv_eg_ops: [Vec<EgAnchor>; 4],
     wv_lfo_bins: Vec<f32>,
     wv_lfo_hold_bins: usize,
+    wv_op_scope: [Vec<f32>; 4],
+    wv_final_scope: Vec<f32>,
     wv_zoom: f32,
     wv_pan: f32,
     wv_content_w: f32,
@@ -270,6 +273,8 @@ impl App {
             wv_eg_ops: Default::default(),
             wv_lfo_bins: Vec::new(),
             wv_lfo_hold_bins: 0,
+            wv_op_scope: Default::default(),
+            wv_final_scope: Vec::new(),
             wv_zoom: 1.0,
             wv_pan: 0.0,
             wv_content_w: 800.0,
@@ -455,6 +460,10 @@ impl App {
         let (lfo_bins, lfo_hold_bins) = render_lfo_bins(&voice, hold_ms);
         self.wv_lfo_bins = lfo_bins;
         self.wv_lfo_hold_bins = lfo_hold_bins;
+        for op_idx in 0..4 {
+            self.wv_op_scope[op_idx] = render_op_scope(&voice, op_idx, note);
+        }
+        self.wv_final_scope = render_final_scope(&voice, note);
         self.wv_dirty = false;
     }
 }
@@ -1149,7 +1158,8 @@ impl eframe::App for App {
                     Color32::from_rgb(200, 100, 80),
                 ];
                 const LABEL_W: f32 = 48.0;
-                let wave_w = (self.wv_content_w - 260.0 - LABEL_W - 8.0).max(80.0);
+                // wave_w leaves room for the SCOPE_W oscilloscope column on the right.
+                let wave_w = (self.wv_content_w - 260.0 - LABEL_W - 8.0 - SCOPE_W - 4.0).max(80.0);
                 let zoom = self.wv_zoom;
                 let show_eg = self.wv_show_eg;
                 show_waveform(
@@ -1162,6 +1172,7 @@ impl eframe::App for App {
                     zoom,
                     &mut self.wv_pan,
                     false,
+                    Some((&self.wv_final_scope, Color32::WHITE)),
                 );
                 show_lfo_waveform(
                     ui,
@@ -1185,6 +1196,7 @@ impl eframe::App for App {
                         zoom,
                         pan,
                         show_eg,
+                        Some((&self.wv_op_scope[op_idx], OP_COLORS[op_idx])),
                     );
                 }
             });
@@ -1509,6 +1521,85 @@ fn render_lfo_bins(voice: &Dx100Voice, hold_ms: u32) -> (Vec<f32>, usize) {
     (bins, hold_n / win)
 }
 
+fn op_base_hz(note: u8, transpose: u8) -> f32 {
+    440.0 * 2.0_f32.powf((note as f32 + transpose as f32 - 24.0 - 69.0) / 12.0)
+}
+
+fn render_op_scope(voice: &Dx100Voice, op_idx: usize, note: u8) -> Vec<f32> {
+    const SR: f32 = 44100.0;
+
+    let op = &voice.ops[op_idx];
+    if op.ar == 0 || op.out_level == 0 {
+        return Vec::new();
+    }
+
+    // Start just past the attack peak
+    let t_atk_s = 0.000085_f32 * 2.0_f32.powf((31.0 - op.ar as f32) * 0.55);
+    let steady_n = ((t_atk_s * 1.2 + 0.005) * SR) as usize;
+
+    let base_hz = op_base_hz(note, voice.transpose);
+    let op_freq = base_hz * FREQ_RATIOS[(op.freq_ratio as usize).min(63)];
+    if op_freq < 0.5 {
+        return Vec::new();
+    }
+    let cycle_n = (SR / op_freq).max(1.0) as usize;
+
+    // Render 4 cycles after steady-state for zero-crossing alignment headroom
+    let mut v = voice.clone();
+    v.algorithm = 0;
+    v.feedback = 0;
+    v.ops[0] = voice.ops[op_idx].clone();
+    for i in 1..4 {
+        v.ops[i].out_level = 0;
+    }
+    let mut engine = FmEngine::new(SR);
+    engine.set_voice(v);
+    engine.note_on(note, 100);
+    let mut buf = vec![0.0f32; steady_n + cycle_n * 4];
+    engine.render(&mut buf);
+
+    let after_atk = &buf[steady_n..];
+    // Trigger on first upward zero crossing
+    let zero = after_atk
+        .windows(2)
+        .position(|w| w[0] <= 0.0 && w[1] > 0.0)
+        .unwrap_or(0);
+    let end = (zero + cycle_n * 3).min(after_atk.len());
+    after_atk[zero..end].to_vec()
+}
+
+fn render_final_scope(voice: &Dx100Voice, note: u8) -> Vec<f32> {
+    const SR: f32 = 44100.0;
+
+    let base_hz = op_base_hz(note, voice.transpose);
+    if base_hz < 0.5 {
+        return Vec::new();
+    }
+
+    let ar = voice.ops[0].ar;
+    let t_atk_s = if ar == 0 {
+        0.01
+    } else {
+        0.000085_f32 * 2.0_f32.powf((31.0 - ar as f32) * 0.55)
+    };
+    let steady_n = ((t_atk_s * 1.2 + 0.005) * SR) as usize;
+    let cycle_n = (SR / base_hz).max(1.0) as usize;
+
+    let mut engine = FmEngine::new(SR);
+    engine.set_voice(voice.clone());
+    engine.note_on(note, 100);
+    let mut buf = vec![0.0f32; steady_n + cycle_n * 4];
+    engine.render(&mut buf);
+
+    let after_atk = &buf[steady_n..];
+    let zero = after_atk
+        .windows(2)
+        .position(|w| w[0] <= 0.0 && w[1] > 0.0)
+        .unwrap_or(0);
+    let end = (zero + cycle_n * 3).min(after_atk.len());
+    after_atk[zero..end].to_vec()
+}
+
 fn compute_eg_anchors(
     op: &xdx_core::dx100::Dx100Operator,
     note: u8,
@@ -1617,6 +1708,41 @@ fn compute_eg_anchors(
     pts
 }
 
+fn draw_scope(ui: &mut egui::Ui, samples: &[f32], color: Color32) {
+    const BG: Color32 = Color32::from_rgb(18, 18, 28);
+    const BORDER: Color32 = Color32::from_rgb(50, 55, 70);
+    const CENTER: Color32 = Color32::from_rgba_premultiplied(50, 50, 70, 220);
+    const WV_H: f32 = 68.0;
+
+    let (_, painter) = ui.allocate_painter(egui::vec2(SCOPE_W, WV_H), egui::Sense::hover());
+    let rect = painter.clip_rect();
+    painter.rect_filled(rect, 2.0, BG);
+    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, BORDER));
+
+    let mt = rect.height() * 0.05;
+    let uh = rect.height() * 0.90;
+    let cy = rect.top() + mt + uh * 0.5;
+    painter.line_segment(
+        [egui::pos2(rect.left(), cy), egui::pos2(rect.right(), cy)],
+        egui::Stroke::new(0.5, CENTER),
+    );
+
+    if samples.len() < 2 {
+        return;
+    }
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+    if peak < 1e-7 {
+        return;
+    }
+    let n = samples.len();
+    let to_x = |i: usize| rect.left() + (i as f32 / (n - 1) as f32) * rect.width();
+    let to_y = |v: f32| rect.top() + mt + (0.5 - (v / peak).clamp(-1.0, 1.0) * 0.5) * uh;
+    let pts: Vec<egui::Pos2> = (0..n)
+        .map(|i| egui::pos2(to_x(i), to_y(samples[i])))
+        .collect();
+    painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, color)));
+}
+
 fn show_lfo_waveform(
     ui: &mut egui::Ui,
     bins: &[f32],
@@ -1709,6 +1835,7 @@ fn show_waveform(
     zoom: f32,
     pan_bins: &mut f32,
     show_eg: bool,
+    scope: Option<(&[f32], Color32)>,
 ) {
     const BG: Color32 = Color32::from_rgb(18, 18, 28);
     const BORDER: Color32 = Color32::from_rgb(50, 55, 70);
@@ -1739,6 +1866,10 @@ fn show_waveform(
         if response.dragged() {
             let delta = -response.drag_delta().x / wave_w * visible as f32;
             *pan_bins = (*pan_bins + delta).clamp(0.0, max_pan);
+        }
+
+        if let Some((samples, scope_color)) = scope {
+            draw_scope(ui, samples, scope_color);
         }
 
         if total < 2 || data.peak < 1e-7 {
