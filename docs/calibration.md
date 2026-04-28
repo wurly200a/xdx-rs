@@ -56,9 +56,9 @@ cargo run -p xdx-compare --bin record-eg-bank -- \
   --bank testdata/syx/eg_test_bank.syx \
   --midi-out "（MIDI デバイス名）" \
   --audio-in "（オーディオデバイス名）" \
-  --out out/eg_bank
-# → out/eg_bank/dx100/01_NAME.wav ... 24 本
-# → out/eg_bank/synth/01_NAME.wav ... 24 本（ソフトシンセ同条件レンダリング）
+  --out testdata/wav/eg_bank
+# → testdata/wav/eg_bank/dx100/01_NAME.wav ... 24 本
+# → testdata/wav/eg_bank/synth/01_NAME.wav ... 24 本（ソフトシンセ同条件レンダリング）
 ```
 
 **録音条件の固定事項（再現性のため）:**
@@ -71,11 +71,11 @@ cargo run -p xdx-compare --bin record-eg-bank -- \
 
 ```bash
 # バッチ: 全ボイスのメトリクステーブル
-cargo run -p xdx-compare --example compare_eg -- --dir out/eg_bank
+cargo run -p xdx-compare --example compare_eg -- --dir testdata/wav/eg_bank
 
 # 単体: ASCII 波形で詳細確認
 cargo run -p xdx-compare --example compare_eg -- \
-  out/eg_bank/dx100/01_AR05.wav out/eg_bank/synth/01_AR05.wav
+  testdata/wav/eg_bank/dx100/01_AR05.wav testdata/wav/eg_bank/synth/01_AR05.wav
 ```
 
 出力される主なメトリクス:
@@ -86,7 +86,7 @@ cargo run -p xdx-compare --example compare_eg -- \
 ### A-5. GUI で波形を目視確認
 
 ```bash
-cargo run -p xdx-eg-viewer -- --dir out/eg_bank
+cargo run -p xdx-eg-viewer -- --dir testdata/wav/eg_bank
 ```
 
 HW（青）vs Synth（橙）を重ねて表示。
@@ -129,7 +129,7 @@ cargo run -p xdx-compare --bin analyze-kbs-calib -- \
   --bank testdata/syx/kbs_calib.syx \
   --notes 48,60,72,84 \
   --midi-out "..." --audio-in "..." \
-  --out out/kbs_calib
+  --out testdata/wav/kbs_calib
 ```
 
 C3/C4/C5/C6（48/60/72/84）の 4 ノートで各ボイスを録音。
@@ -161,8 +161,8 @@ cargo run -p xdx-compare -- \
   path/to/voice.syx \
   --midi-out "..." --audio-in "..." \
   --note 60 --duration 2.0 --release 1.0 \
-  --out out/quick
-# → out/quick/dx100.wav, out/quick/synth.wav
+  --out testdata/wav/quick
+# → testdata/wav/quick/dx100.wav, testdata/wav/quick/synth.wav
 # → RMS・ピーク・レベルマッチゲイン(dB) を標準出力に表示
 ```
 
@@ -203,14 +203,14 @@ cargo run -p xdx-e2e --example gen_lfo_calib
 cargo run -p xdx-compare --bin record-eg-bank --release -- \
   testdata/syx/lfo_calib.syx \
   --midi-out "UM-ONE" --audio-in "<device>" \
-  --note 60 --hold 8.0 --release 1.0 --out out/lfo_calib/grp_a
+  --note 60 --hold 8.0 --release 1.0 --out testdata/wav/lfo_calib/grp_a
 ```
 
 ### D-3. 分析
 
 ```bash
 cargo run -p xdx-compare --bin analyze-lfo-calib --release -- \
-  --dir out/lfo_calib/grp_a
+  --dir testdata/wav/lfo_calib/grp_a
 ```
 
 ### D-4. 2024年実測値（DX100 ハードウェア、note=60）
@@ -281,7 +281,7 @@ cargo run -p xdx-compare --bin analyze-lfo-calib --release -- \
 ## 作業ディレクトリ構成（参考）
 
 ```
-out/
+testdata/wav/
   eg_bank/
     dx100/   01_AR05.wav ... 24本
     synth/   01_AR05.wav ... 24本
