@@ -1,2 +1,5 @@
 /target
+references/
 Cargo.lock
+testdata/wav/*/synth/
+testdata/wav/*/*/synth/
