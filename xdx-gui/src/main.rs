@@ -1159,9 +1159,7 @@ impl eframe::App for App {
                 ];
                 const LABEL_W: f32 = 48.0;
                 // wave_w leaves room for the SCOPE_W oscilloscope column on the right.
-                // LFO row has no scope so it uses the combined width.
                 let wave_w = (self.wv_content_w - 260.0 - LABEL_W - 8.0 - SCOPE_W - 4.0).max(80.0);
-                let lfo_wave_w = wave_w + SCOPE_W + 4.0;
                 let zoom = self.wv_zoom;
                 let show_eg = self.wv_show_eg;
                 show_waveform(
@@ -1180,7 +1178,7 @@ impl eframe::App for App {
                     ui,
                     &self.wv_lfo_bins,
                     self.wv_lfo_hold_bins,
-                    lfo_wave_w,
+                    wave_w,
                     zoom,
                     &mut self.wv_pan,
                 );
