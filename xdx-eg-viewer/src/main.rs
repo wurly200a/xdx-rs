@@ -113,7 +113,6 @@ struct EgViewerApp {
     status: String,
     view_mode: ViewMode,
     wave_height: f32,
-    wave_width: f32,
 }
 
 impl Default for EgViewerApp {
@@ -126,7 +125,6 @@ impl Default for EgViewerApp {
             status: String::new(),
             view_mode: ViewMode::Overlay,
             wave_height: 88.0,
-            wave_width: 500.0,
         }
     }
 }
@@ -253,9 +251,10 @@ impl eframe::App for EgViewerApp {
             }
 
             // ── Column headers ────────────────────────────────────────────────
-            let wave_w = self.wave_width;
             let name_w = 90.0_f32;
             let metrics_w = 210.0_f32;
+            // Subtract fixed columns + inter-column spacing + vertical scrollbar allowance
+            let wave_w = (ui.available_width() - name_w - metrics_w - 44.0).max(200.0);
 
             ui.horizontal(|ui| {
                 ui.add_space(name_w);
