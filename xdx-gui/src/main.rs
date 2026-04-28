@@ -1152,14 +1152,6 @@ impl eframe::App for App {
                 let wave_w = (self.wv_content_w - 260.0 - LABEL_W - 8.0).max(80.0);
                 let zoom = self.wv_zoom;
                 let show_eg = self.wv_show_eg;
-                show_lfo_waveform(
-                    ui,
-                    &self.wv_lfo_bins,
-                    self.wv_lfo_hold_bins,
-                    wave_w,
-                    zoom,
-                    &mut self.wv_pan,
-                );
                 show_waveform(
                     ui,
                     &self.wv_final,
@@ -1170,6 +1162,14 @@ impl eframe::App for App {
                     zoom,
                     &mut self.wv_pan,
                     false,
+                );
+                show_lfo_waveform(
+                    ui,
+                    &self.wv_lfo_bins,
+                    self.wv_lfo_hold_bins,
+                    wave_w,
+                    zoom,
+                    &mut self.wv_pan,
                 );
                 for op_idx in (0..4usize).rev() {
                     let label = format!("OP{}", op_idx + 1);
