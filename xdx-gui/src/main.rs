@@ -220,6 +220,8 @@ struct App {
     wv_ops: [WvBins; 4],
     wv_final: WvBins,
     wv_eg_ops: [Vec<EgAnchor>; 4],
+    wv_lfo_bins: Vec<f32>,
+    wv_lfo_hold_bins: usize,
     wv_zoom: f32,
     wv_pan: f32,
     wv_content_w: f32,
@@ -266,6 +268,8 @@ impl App {
             wv_ops: Default::default(),
             wv_final: WvBins::default(),
             wv_eg_ops: Default::default(),
+            wv_lfo_bins: Vec::new(),
+            wv_lfo_hold_bins: 0,
             wv_zoom: 1.0,
             wv_pan: 0.0,
             wv_content_w: 800.0,
@@ -448,6 +452,9 @@ impl App {
             self.wv_ops[op_idx] = render_op_bins(&voice, op_idx, note, hold_ms);
             self.wv_eg_ops[op_idx] = compute_eg_anchors(&voice.ops[op_idx], note, hold_ms);
         }
+        let (lfo_bins, lfo_hold_bins) = render_lfo_bins(&voice, hold_ms);
+        self.wv_lfo_bins = lfo_bins;
+        self.wv_lfo_hold_bins = lfo_hold_bins;
         self.wv_dirty = false;
     }
 }
@@ -1145,6 +1152,14 @@ impl eframe::App for App {
                 let wave_w = (self.wv_content_w - 260.0 - LABEL_W - 8.0).max(80.0);
                 let zoom = self.wv_zoom;
                 let show_eg = self.wv_show_eg;
+                show_lfo_waveform(
+                    ui,
+                    &self.wv_lfo_bins,
+                    self.wv_lfo_hold_bins,
+                    wave_w,
+                    zoom,
+                    &mut self.wv_pan,
+                );
                 show_waveform(
                     ui,
                     &self.wv_final,
@@ -1480,6 +1495,20 @@ fn render_op_bins(voice: &Dx100Voice, op_idx: usize, note: u8, hold_ms: u32) -> 
     render_wv_bins(&v, note, hold_ms)
 }
 
+fn render_lfo_bins(voice: &Dx100Voice, hold_ms: u32) -> (Vec<f32>, usize) {
+    const SR: f32 = 44100.0;
+    const RELEASE_MS: u32 = 1500;
+    let win = (SR * WV_WIN_MS / 1000.0) as usize;
+    let hold_n = (SR * hold_ms as f32 / 1000.0) as usize;
+    let rel_n = (SR * RELEASE_MS as f32 / 1000.0) as usize;
+    let raw = xdx_synth::render_lfo(voice, SR, hold_n, rel_n);
+    let bins = raw
+        .chunks(win)
+        .map(|c| c.iter().sum::<f32>() / c.len() as f32)
+        .collect();
+    (bins, hold_n / win)
+}
+
 fn compute_eg_anchors(
     op: &xdx_core::dx100::Dx100Operator,
     note: u8,
@@ -1586,6 +1615,88 @@ fn compute_eg_anchors(
     });
 
     pts
+}
+
+fn show_lfo_waveform(
+    ui: &mut egui::Ui,
+    bins: &[f32],
+    hold_bins: usize,
+    wave_w: f32,
+    zoom: f32,
+    pan_bins: &mut f32,
+) {
+    const BG: Color32 = Color32::from_rgb(18, 18, 28);
+    const BORDER: Color32 = Color32::from_rgb(50, 55, 70);
+    const NOFF: Color32 = Color32::from_rgba_premultiplied(112, 112, 41, 130);
+    const CENTER_LINE: Color32 = Color32::from_rgba_premultiplied(50, 50, 70, 220);
+    const LFO_COLOR: Color32 = Color32::from_rgb(160, 100, 220);
+    const WV_H: f32 = 68.0;
+    const LABEL_W: f32 = 48.0;
+
+    let total = bins.len();
+    let visible = ((total as f32 / zoom.max(1.0)).ceil() as usize).max(2);
+    let max_pan = (total.saturating_sub(visible)) as f32;
+    *pan_bins = pan_bins.clamp(0.0, max_pan);
+    let start = pan_bins.floor() as usize;
+
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(LABEL_W);
+            ui.set_min_height(WV_H);
+            ui.add_space(WV_H / 2.0 - 8.0);
+            ui.label(RichText::new("LFO").small().strong().color(LFO_COLOR));
+        });
+
+        let (response, painter) =
+            ui.allocate_painter(egui::vec2(wave_w, WV_H), egui::Sense::drag());
+        let rect = response.rect;
+        painter.rect_filled(rect, 2.0, BG);
+        painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, BORDER));
+
+        if response.dragged() {
+            let delta = -response.drag_delta().x / wave_w * visible as f32;
+            *pan_bins = (*pan_bins + delta).clamp(0.0, max_pan);
+        }
+
+        let mt = rect.height() * 0.05;
+        let uh = rect.height() * 0.90;
+
+        // Zero line
+        let cy = rect.top() + mt + uh * 0.5;
+        painter.line_segment(
+            [egui::pos2(rect.left(), cy), egui::pos2(rect.right(), cy)],
+            egui::Stroke::new(0.5, CENTER_LINE),
+        );
+
+        if total < 2 {
+            return;
+        }
+
+        let to_x = |n: f32| rect.left() + (n / visible as f32).clamp(0.0, 1.0) * rect.width();
+        // +1.0 → top, 0.0 → center, -1.0 → bottom
+        let to_y = |v: f32| rect.top() + mt + (1.0 - (v.clamp(-1.0, 1.0) * 0.5 + 0.5)) * uh;
+
+        // Note-off line
+        let noff_disp = hold_bins.saturating_sub(start);
+        if noff_disp < visible {
+            painter.line_segment(
+                [
+                    egui::pos2(to_x(noff_disp as f32), rect.top()),
+                    egui::pos2(to_x(noff_disp as f32), rect.bottom()),
+                ],
+                egui::Stroke::new(1.0, NOFF),
+            );
+        }
+
+        let end = (start + visible).min(total);
+        let pts: Vec<egui::Pos2> = (start..end)
+            .enumerate()
+            .map(|(i, b)| egui::pos2(to_x(i as f32), to_y(bins[b])))
+            .collect();
+        if pts.len() >= 2 {
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, LFO_COLOR)));
+        }
+    });
 }
 
 fn show_waveform(
