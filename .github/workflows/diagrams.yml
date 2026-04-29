@@ -1,0 +1,114 @@
+name: Check architecture diagrams
+
+on:
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_MODULES_VERSION: "0.26.0"
+
+jobs:
+  # ── Detect whether diagram-relevant files changed ──────────────────────────
+  check_changes:
+    name: Detect diagram-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      needs_check: ${{ steps.filter.outputs.needs_check }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for relevant changes
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE '^(xdx-|Cargo\.|vendor/|tools/rust-mermaid\.py|rust-mermaid\.toml)'; then
+            echo "needs_check=true" >> $GITHUB_OUTPUT
+            echo "Diagram-relevant files changed – checking diagrams"
+          else
+            echo "needs_check=false" >> $GITHUB_OUTPUT
+            echo "No relevant changes – skipping diagram check"
+          fi
+
+  # ── Verify committed diagrams match generated output ───────────────────────
+  check_diagrams:
+    name: Diagrams up to date
+    needs: check_changes
+    if: needs.check_changes.outputs.needs_check == 'true'
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache cargo-modules binary
+        id: cache-modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-modules.exe
+          key: ${{ runner.os }}-cargo-modules-${{ env.CARGO_MODULES_VERSION }}
+
+      - name: Install cargo-modules
+        if: steps.cache-modules.outputs.cache-hit != 'true'
+        run: cargo install cargo-modules --version ${{ env.CARGO_MODULES_VERSION }} --locked
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Regenerate architecture diagrams
+        run: |
+          python tools/rust-mermaid.py --preset release     --symbols struct,enum,trait,fn,type --out docs/architecture-release.md
+          python tools/rust-mermaid.py --preset validation  --symbols struct,enum,trait,fn,type --out docs/architecture-validation.md
+
+      - name: Check diagrams are up to date
+        shell: bash
+        run: |
+          if ! git diff --exit-code docs/architecture-release.md docs/architecture-validation.md; then
+            echo ""
+            echo "Architecture diagrams are stale. Regenerate locally and commit:"
+            echo "  python tools/rust-mermaid.py --preset release    --symbols struct,enum,trait,fn,type --out docs/architecture-release.md"
+            echo "  python tools/rust-mermaid.py --preset validation --symbols struct,enum,trait,fn,type --out docs/architecture-validation.md"
+            exit 1
+          fi
+
+  # ── Required merge gate ────────────────────────────────────────────────────
+  checkpoint_success:
+    name: Diagrams check passed
+    if: always()
+    needs: [check_changes, check_diagrams]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check result
+        run: |
+          changes="${{ needs.check_changes.result }}"
+          diagrams="${{ needs.check_diagrams.result }}"
+          echo "check_changes : $changes"
+          echo "check_diagrams: $diagrams"
+          if [[ "$changes" != "success" ]]; then
+            echo "check_changes failed."
+            exit 1
+          fi
+          if [[ "$diagrams" == "success" || "$diagrams" == "skipped" ]]; then
+            echo "Diagrams check passed."
+          else
+            echo "Diagrams check failed."
+            exit 1
+          fi
