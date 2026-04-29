@@ -1,0 +1,15 @@
+# rust-mermaid.toml — presets for tools/rust-mermaid.py
+#
+# Usage:
+#   python tools/rust-mermaid.py --preset release
+#   python tools/rust-mermaid.py --preset validation
+#   python tools/rust-mermaid.py --preset all
+
+[preset.release]
+crates = ["xdx-gui", "xdx-core", "xdx-midi", "xdx-synth"]
+
+[preset.validation]
+crates = ["xdx-compare", "xdx-core", "xdx-e2e", "xdx-eg-viewer", "xdx-midi", "xdx-synth"]
+
+[preset.all]
+crates = ["xdx-gui", "xdx-core", "xdx-midi", "xdx-synth", "xdx-compare", "xdx-e2e", "xdx-eg-viewer"]
