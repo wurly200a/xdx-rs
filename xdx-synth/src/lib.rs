@@ -351,8 +351,12 @@ impl Note {
         for (i, op) in ops.iter_mut().enumerate() {
             let p = &voice.ops[i];
             let ratio = FREQ_RATIOS[(p.freq_ratio as usize).min(63)];
-            let detune_cents = (p.detune as f32 - 3.0) * 3.0;
-            op.freq = base_hz * ratio * 2.0_f32.powf(detune_cents / 1200.0);
+            // Power-law detune: detune_hz = k * op_hz^0.58 * steps
+            // k=0.00469 = 0.160 / 440^0.58, exponent=0.58 = log2(0.160/0.107) / log2(440/220)
+            // Fitted to DX100 measurements: 440Hz→0.160 Hz/step, 220Hz→0.107 Hz/step (±2,±3 steps).
+            let op_hz = base_hz * ratio;
+            let detune_hz = (p.detune as f32 - 3.0) * 0.00469 * op_hz.powf(0.58);
+            op.freq = op_hz + detune_hz;
             let kls_reduction = (p.kbd_lev_scl as f32 * kls_note_factor / 400.0) as u8;
             let vel_factor = 1.0 - (p.key_vel_sens as f32 / 7.0) * (1.0 - vel_scale);
             op.amp = level_to_amp(p.out_level.saturating_sub(kls_reduction)) * vel_factor;

@@ -16,6 +16,7 @@
 //!   --hold <secs>       Note hold duration per voice  (default: 3.0)
 //!   --release <secs>    Release capture time per voice (default: 3.0)
 //!   --channel <1-16>    MIDI channel (default: 1)
+//!   --count <n>         Record only the first N voices (default: all)
 //!   --out <dir>         Output directory (default: out/eg_bank)
 //!
 //! Output structure:
@@ -60,11 +61,15 @@ fn main() {
         .map(|c| c.clamp(1, 16))
         .unwrap_or(1);
     let out_dir = flag_val(&args, "--out").unwrap_or_else(|| "out/eg_bank".to_string());
+    let count_limit = flag_val(&args, "--count").and_then(|s| s.parse::<usize>().ok());
 
     // Load bank
     let bytes = std::fs::read(syx_path).unwrap_or_else(|e| panic!("Cannot read {syx_path}: {e}"));
     let voices = dx100_decode_32voice(&bytes).unwrap_or_else(|e| panic!("Decode failed: {e:?}"));
-    let n = voices.len().min(BANK_VOICES);
+    let n = voices
+        .len()
+        .min(BANK_VOICES)
+        .min(count_limit.unwrap_or(usize::MAX));
 
     println!("=== record-eg-bank ===");
     println!("Bank:     {syx_path}  ({n} voices)");
