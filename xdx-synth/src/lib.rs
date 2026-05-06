@@ -117,12 +117,14 @@ impl Envelope {
 }
 
 // Attack: per-sample increment to normalised attack time (smoothstep S-curve).
-// t = full attack duration; calibrated from DX100 hardware: AR=20 → atk90 ≈ 5ms.
+// t = full attack duration; calibrated from DX100 hardware (AR=1..15 log-linear fit):
+//   coeff=0.000253, exponent=0.49  (previous: 0.000085 / 0.55 — exponent was too steep,
+//   causing SW to attack 9-40% faster than HW for AR=5..15).
 fn rate_inc_t(rate: u8, max_rate: u8, sr: f32) -> f32 {
     if rate == 0 {
         return 0.0;
     }
-    let t = 0.000085_f32 * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.55);
+    let t = 0.000253_f32 * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.49);
     1.0 / (t * sr)
 }
 

@@ -289,23 +289,42 @@ fn render_synth(
     release_s: f32,
 ) -> Vec<f32> {
     const SR: u32 = 44100;
-    let total = ((hold_s + release_s) * SR as f32) as usize;
-    let note_off_pos = (hold_s * SR as f32) as usize;
+    // Ensure find_onset has leading silence to reference: Envelope::tick advances ar_t before
+    // outputting, so sample 0 is already non-zero for fast AR (e.g. AR=31 → ~1.75% of peak,
+    // above the 0.5% onset threshold).  20ms = 2 RMS bins is the minimum meaningful offset.
+    const PRE_DELAY_S: f32 = 0.02;
+
+    let pre_samples = (PRE_DELAY_S * SR as f32) as usize;
+    let note_off_pos = pre_samples + (hold_s * SR as f32) as usize;
+    let total = pre_samples + ((hold_s + release_s) * SR as f32) as usize;
 
     let mut engine = FmEngine::new(SR as f32);
     engine.set_voice(voice.clone());
+
+    let mut samples = vec![0.0f32; pre_samples];
     engine.note_on(midi_note, 100);
 
-    let mut samples = Vec::with_capacity(total);
     let mut buf = vec![0.0f32; 512];
-    let mut pos = 0usize;
+    let mut pos = pre_samples;
+    let mut released = false;
 
     while pos < total {
         let chunk = buf.len().min(total - pos);
-        engine.render(&mut buf[..chunk]);
-        if pos < note_off_pos && pos + chunk >= note_off_pos {
+        buf[..chunk].fill(0.0);
+
+        if !released && pos + chunk > note_off_pos {
+            // Split at note_off_pos for sample-accurate release timing.
+            // Without splitting, note_off would be called after rendering the full chunk,
+            // delaying release start by up to chunk_size samples (~11.6 ms at 44100 Hz).
+            let split = note_off_pos - pos;
+            engine.render(&mut buf[..split]);
             engine.note_off(midi_note);
+            released = true;
+            engine.render(&mut buf[split..chunk]);
+        } else {
+            engine.render(&mut buf[..chunk]);
         }
+
         samples.extend_from_slice(&buf[..chunk]);
         pos += chunk;
     }
