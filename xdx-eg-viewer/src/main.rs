@@ -108,8 +108,9 @@ struct EgViewerApp {
     status: String,
     view_mode: ViewMode,
     wave_height: f32,
-    x_zoom: f32,   // 1.0 = fit-all; > 1.0 = zoomed in
-    x_scroll: f32, // [0.0, 1.0] position within the scrollable range
+    x_zoom: f32,               // 1.0 = fit-all; > 1.0 = zoomed in
+    x_scroll: f32,             // [0.0, 1.0] position within the scrollable range
+    hover_time_s: Option<f32>, // cursor time from the previous frame, shown in toolbar
 }
 
 impl Default for EgViewerApp {
@@ -124,6 +125,7 @@ impl Default for EgViewerApp {
             wave_height: 88.0,
             x_zoom: 1.0,
             x_scroll: 0.0,
+            hover_time_s: None,
         }
     }
 }
@@ -293,6 +295,13 @@ impl eframe::App for EgViewerApp {
                 ui.label(RichText::new("■ SY").color(SY_COLOR).small());
                 ui.add_space(8.0);
                 ui.label(RichText::new("│ = note-off").color(NOFF_COLOR).small());
+                ui.separator();
+                ui.label(RichText::new("t:").weak());
+                let time_str = match self.hover_time_s {
+                    Some(t) => format!("{:.6} s", t),
+                    None => "—".to_string(),
+                };
+                ui.label(RichText::new(time_str).monospace());
                 if !self.status.is_empty() {
                     ui.separator();
                     ui.label(RichText::new(&self.status).color(Color32::GRAY).small());
@@ -345,6 +354,9 @@ impl eframe::App for EgViewerApp {
             // consumes all remaining height.
             let scrollbar_reserve = if self.x_zoom > 1.0 { 22.0_f32 } else { 0.0 };
             let avail_h = (ui.available_height() - scrollbar_reserve).max(100.0);
+            // Collect hover time across all waveform rects this frame.
+            // Cell allows interior mutation inside the shared-ref closure.
+            let hover_cell = std::cell::Cell::new(None::<f32>);
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .max_height(avail_h)
@@ -379,17 +391,19 @@ impl eframe::App for EgViewerApp {
                             if let Some(row) = row_opt {
                                 match self.view_mode {
                                     ViewMode::Overlay => {
-                                        draw_overlay(
+                                        if let Some(t) = draw_overlay(
                                             ui,
                                             row,
                                             Vec2::new(wave_w, wave_h),
                                             x_zoom,
                                             x_scroll,
-                                        );
+                                        ) {
+                                            hover_cell.set(Some(t));
+                                        }
                                     }
                                     ViewMode::SideBySide => {
                                         let hw = wave_w * 0.5 - 2.0;
-                                        draw_waveform(
+                                        if let Some(t) = draw_waveform(
                                             ui,
                                             &row.dx_bins,
                                             row.dx_onset,
@@ -399,9 +413,11 @@ impl eframe::App for EgViewerApp {
                                             HW_COLOR,
                                             x_zoom,
                                             x_scroll,
-                                        );
+                                        ) {
+                                            hover_cell.set(Some(t));
+                                        }
                                         ui.add_space(4.0);
-                                        draw_waveform(
+                                        if let Some(t) = draw_waveform(
                                             ui,
                                             &row.sy_bins,
                                             row.sy_onset,
@@ -411,7 +427,9 @@ impl eframe::App for EgViewerApp {
                                             SY_COLOR,
                                             x_zoom,
                                             x_scroll,
-                                        );
+                                        ) {
+                                            hover_cell.set(Some(t));
+                                        }
                                     }
                                 }
 
@@ -428,6 +446,7 @@ impl eframe::App for EgViewerApp {
                         ui.separator();
                     }
                 });
+            self.hover_time_s = hover_cell.get();
 
             // ── Horizontal scrollbar (visible only when zoomed in) ─────────────
             if self.x_zoom > 1.0 {
@@ -456,7 +475,7 @@ fn draw_waveform(
     color: Color32,
     x_zoom: f32,
     x_scroll: f32,
-) {
+) -> Option<f32> {
     let (response, painter) = ui.allocate_painter(size, egui::Sense::hover());
     let rect = response.rect;
     painter.rect_filled(rect, 2.0, BG_COLOR);
@@ -464,15 +483,22 @@ fn draw_waveform(
 
     let total = bins.len().saturating_sub(onset);
     if total == 0 || peak < 1e-7 {
-        return;
+        return None;
     }
 
     waveform_inner(
         &painter, rect, bins, onset, peak, hold_bins, total, color, x_zoom, x_scroll,
     );
+    draw_hover_cursor(response, &painter, rect, total, x_zoom, x_scroll)
 }
 
-fn draw_overlay(ui: &mut egui::Ui, row: &VoiceRow, size: Vec2, x_zoom: f32, x_scroll: f32) {
+fn draw_overlay(
+    ui: &mut egui::Ui,
+    row: &VoiceRow,
+    size: Vec2,
+    x_zoom: f32,
+    x_scroll: f32,
+) -> Option<f32> {
     let (response, painter) = ui.allocate_painter(size, egui::Sense::hover());
     let rect = response.rect;
     painter.rect_filled(rect, 2.0, BG_COLOR);
@@ -482,7 +508,7 @@ fn draw_overlay(ui: &mut egui::Ui, row: &VoiceRow, size: Vec2, x_zoom: f32, x_sc
     let sy_total = row.sy_bins.len().saturating_sub(row.sy_onset);
     let total = dx_total.max(sy_total);
     if total == 0 {
-        return;
+        return None;
     }
 
     waveform_inner(
@@ -526,6 +552,38 @@ fn draw_overlay(ui: &mut egui::Ui, row: &VoiceRow, size: Vec2, x_zoom: f32, x_sc
         font,
         SY_COLOR,
     );
+    draw_hover_cursor(response, &painter, rect, total, x_zoom, x_scroll)
+}
+
+// Draw a vertical crosshair when hovered; return elapsed time from note-on in µs.
+fn draw_hover_cursor(
+    response: egui::Response,
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    total: usize,
+    x_zoom: f32,
+    x_scroll: f32,
+) -> Option<f32> {
+    let hover_pos = match response.hover_pos() {
+        Some(p) if rect.contains(p) => p,
+        _ => return None,
+    };
+
+    let visible_frac = 1.0 / x_zoom;
+    let start_frac = x_scroll * (1.0 - visible_frac).max(0.0);
+    let cursor_frac = ((hover_pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+    let bin_from_onset = (start_frac + cursor_frac * visible_frac) * total as f32;
+    let time_s = bin_from_onset * WINDOW_MS / 1000.0;
+
+    painter.line_segment(
+        [
+            egui::pos2(hover_pos.x, rect.top()),
+            egui::pos2(hover_pos.x, rect.bottom()),
+        ],
+        Stroke::new(1.0, Color32::from_rgba_premultiplied(220, 220, 220, 90)),
+    );
+
+    Some(time_s)
 }
 
 fn waveform_inner(
