@@ -134,7 +134,7 @@ done
 録音完了後、`xdx-eg-viewer` で波形を目視比較できます。
 
 ```bash
-cargo run -p xdx-eg-viewer -- calibration/preset_dx100_1
+cargo run -p xdx-eg-viewer -- --dir calibration/preset_dx100_1
 ```
 
 定量メトリクスの差分テーブルを出力する場合:

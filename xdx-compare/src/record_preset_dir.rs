@@ -23,7 +23,8 @@
 //!   note     MIDI note number (default: 69 = A4)
 //!   hold     Note hold seconds (default: 3.0)
 //!   release  Release capture seconds (default: 3.0)
-//!   count    Record only first N voices (default: all 32)
+//!   start    First voice to record, 1-indexed (default: 1)
+//!   count    Number of voices to record from start (default: all remaining)
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Deserialize;
@@ -41,6 +42,7 @@ struct RecordConfig {
     note: Option<u8>,
     hold: Option<f32>,
     release: Option<f32>,
+    start: Option<usize>,
     count: Option<usize>,
 }
 
@@ -51,6 +53,7 @@ impl Default for RecordConfig {
             note: None,
             hold: None,
             release: None,
+            start: None,
             count: None,
         }
     }
@@ -77,6 +80,7 @@ fn main() {
     let hold_s: f32 = cfg.hold.unwrap_or(3.0);
     let release_s: f32 = cfg.release.unwrap_or(3.0);
     let count_limit = cfg.count;
+    let start_raw = cfg.start.unwrap_or(1).saturating_sub(1); // will be clamped after decode
 
     let midi_out = flag_val(&args, "--midi-out");
     let audio_in = flag_val(&args, "--audio-in");
@@ -88,10 +92,12 @@ fn main() {
     let bytes = std::fs::read(&syx_path)
         .unwrap_or_else(|e| panic!("Cannot read {}: {e}", syx_path.display()));
     let voices = dx100_decode_32voice(&bytes).unwrap_or_else(|e| panic!("Decode failed: {e:?}"));
-    let n = voices
-        .len()
-        .min(BANK_VOICES)
-        .min(count_limit.unwrap_or(usize::MAX));
+    let total_voices = voices.len().min(BANK_VOICES);
+    // start is 1-indexed in record.json; convert to 0-indexed and clamp to valid range
+    let start_idx = start_raw.min(total_voices);
+    let n = count_limit
+        .unwrap_or(total_voices - start_idx)
+        .min(total_voices - start_idx);
 
     let dx100_dir = dir.join("dx100");
     let synth_dir = dir.join("synth");
@@ -135,7 +141,7 @@ fn main() {
 
     let est_per_voice = 0.3 + hold_s + release_s + 0.3;
 
-    for i in 0..n {
+    for (seq, i) in (start_idx..start_idx + n).enumerate() {
         let voice = &voices[i];
         let name = voice.name_str();
         let safe_name: String = name
@@ -151,10 +157,10 @@ fn main() {
 
         println!(
             "[{:2}/{}]  {:<12}  (est. {:.0}s remaining)",
-            i + 1,
+            seq + 1,
             n,
             name,
-            (n - i) as f32 * est_per_voice
+            (n - seq) as f32 * est_per_voice
         );
 
         let synth_samples = render_synth(voice, note, hold_s, release_s);
