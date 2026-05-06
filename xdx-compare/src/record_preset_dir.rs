@@ -292,7 +292,7 @@ fn render_synth(
     // Ensure find_onset has leading silence to reference: Envelope::tick advances ar_t before
     // outputting, so sample 0 is already non-zero for fast AR (e.g. AR=31 → ~1.75% of peak,
     // above the 0.5% onset threshold).  20ms = 2 RMS bins is the minimum meaningful offset.
-    const PRE_DELAY_S: f32 = 0.02;
+    const PRE_DELAY_S: f32 = 0.01;
 
     let pre_samples = (PRE_DELAY_S * SR as f32) as usize;
     let note_off_pos = pre_samples + (hold_s * SR as f32) as usize;
