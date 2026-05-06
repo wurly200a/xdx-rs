@@ -97,10 +97,10 @@ fn main() {
         let bank_syx = dx100_encode_32voice(&voices, channel - 1);
         m.send(&bank_syx).expect("send bank SysEx");
         println!(
-            "Sent bank SysEx ({} bytes). Waiting 600ms for DX100 to load…",
+            "Sent bank SysEx ({} bytes). Waiting 1000ms for DX100 to load…",
             bank_syx.len()
         );
-        std::thread::sleep(Duration::from_millis(600));
+        std::thread::sleep(Duration::from_millis(1000));
         println!();
         Some(m)
     } else {

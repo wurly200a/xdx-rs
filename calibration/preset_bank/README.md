@@ -3,6 +3,10 @@
 ## ŽÀ‹@˜^‰¹
 
 ```bash
+cargo run -p xdx-compare --bin record-preset-dir -- calibration/preset_bank --midi-out "UM-ONE" --audio-in "Neva Uno 1&2 (ESI Audio Device (WDM) - Neva Uno)"
+```
+
+```bash
 cargo run -p xdx-compare --bin record-eg-bank --release -- calibration/preset_bank/all_voices.syx --midi-out "UM-ONE" --audio-in "Neva Uno 1&2 (ESI Audio Device (WDM) - Neva Uno)" --out calibration/preset_bank
 ```
 
