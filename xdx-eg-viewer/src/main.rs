@@ -4,6 +4,7 @@ use eframe::egui::{self, Color32, RichText, ScrollArea, Stroke, Vec2};
 use hound::WavReader;
 
 const WINDOW_MS: f32 = 10.0;
+const HW_PRE_DELAY_MS: f32 = 300.0; // matches record_voice::PRE_DELAY_MS in record_preset_dir.rs
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 
@@ -28,12 +29,6 @@ fn load_rms_bins(path: &str) -> Option<Vec<f32>> {
         .map(|c| (c.iter().map(|s| s * s).sum::<f32>() / c.len() as f32).sqrt())
         .collect();
     Some(bins)
-}
-
-fn find_onset(bins: &[f32]) -> usize {
-    let peak = bins.iter().cloned().fold(0.0_f32, f32::max);
-    let thr = peak * 0.005;
-    bins.iter().position(|&r| r > thr).unwrap_or(0)
 }
 
 #[derive(Clone, Default)]
@@ -180,8 +175,11 @@ impl EgViewerApp {
                 (Some(dx_bins), Some(sy_bins)) => {
                     let dx_peak = dx_bins.iter().cloned().fold(0.0_f32, f32::max);
                     let sy_peak = sy_bins.iter().cloned().fold(0.0_f32, f32::max);
-                    let dx_onset = find_onset(&dx_bins);
-                    let sy_onset = find_onset(&sy_bins);
+                    // Use absolute Note-On time as onset instead of peak-detection.
+                    // DX100 recordings have a fixed PRE_DELAY_MS of silence before Note On;
+                    // synth renders start Note On at sample 0.
+                    let dx_onset = (HW_PRE_DELAY_MS / WINDOW_MS) as usize;
+                    let sy_onset = 0usize;
                     let dx_m = compute_metrics(&dx_bins, dx_onset, hold_bins);
                     let sy_m = compute_metrics(&sy_bins, sy_onset, hold_bins);
                     self.rows.push((
