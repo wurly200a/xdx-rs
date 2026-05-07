@@ -16,16 +16,18 @@ enum Stage {
 
 // DX100 EG attack uses a smoothstep S-curve: slow start → fast middle → slow near peak.
 // Internally tracks normalised time ar_t ∈ [0, 1]; amplitude = smoothstep(ar_t).
+// A hardware-measured zero-hold period precedes the rise; see AR_ZERO_S.
 #[derive(Clone)]
 struct Envelope {
     stage: Stage,
-    level: f32,    // 0.0..=1.0 linear amplitude (output)
-    ar_inc_t: f32, // per-sample increment to normalised attack time
-    ar_t: f32,     // normalised attack time 0..=1
-    d1r_mul: f32,  // per-sample exponential multiplier (decay1)
-    d2r_mul: f32,  // per-sample exponential multiplier (decay2)
-    rr_mul: f32,   // per-sample exponential multiplier (release)
-    d1l: f32,      // Decay-1 target level (linear, log-mapped)
+    level: f32,          // 0.0..=1.0 linear amplitude (output)
+    ar_inc_t: f32,       // per-sample increment to normalised attack time (rise phase only)
+    ar_t: f32,           // normalised attack time 0..=1
+    ar_zero_remain: u32, // samples remaining in the initial zero-hold phase
+    d1r_mul: f32,        // per-sample exponential multiplier (decay1)
+    d2r_mul: f32,        // per-sample exponential multiplier (decay2)
+    rr_mul: f32,         // per-sample exponential multiplier (release)
+    d1l: f32,            // Decay-1 target level (linear, log-mapped)
 }
 
 impl Envelope {
@@ -35,6 +37,7 @@ impl Envelope {
             level: 0.0,
             ar_inc_t: 0.0,
             ar_t: 0.0,
+            ar_zero_remain: 0,
             d1r_mul: 1.0,
             d2r_mul: 1.0,
             rr_mul: 1.0,
@@ -51,7 +54,9 @@ impl Envelope {
         let effective_krs = (op.kbd_rate_scl * (op.kbd_rate_scl + 1)) / 2; // 0,1,3,6
         let rate_boost = (effective_krs as f32 * midi_note as f32 / 72.0).round() as u8;
 
-        self.ar_inc_t = rate_inc_t((op.ar + rate_boost).min(31), 31, sr);
+        let ar = (op.ar + rate_boost).min(31);
+        self.ar_inc_t = rate_inc_t(ar, 31, sr);
+        self.ar_zero_remain = ar_zero_samples(ar, sr);
         self.ar_t = 0.0;
         self.d1r_mul = rate_mul((op.d1r + rate_boost).min(31), 31, 0.000092, sr);
         self.d2r_mul = rate_mul((op.d2r + rate_boost).min(31), 31, 0.000092, sr);
@@ -79,12 +84,16 @@ impl Envelope {
         match self.stage {
             Stage::Attack => {
                 if self.ar_inc_t > 0.0 {
-                    self.ar_t = (self.ar_t + self.ar_inc_t).min(1.0);
-                    // smoothstep: level = 3t² - 2t³  (slow start, fast middle, slow end)
-                    self.level = self.ar_t * self.ar_t * (3.0 - 2.0 * self.ar_t);
-                    if self.ar_t >= 1.0 {
-                        self.level = 1.0;
-                        self.stage = Stage::Decay1;
+                    if self.ar_zero_remain > 0 {
+                        self.ar_zero_remain -= 1;
+                    } else {
+                        self.ar_t = (self.ar_t + self.ar_inc_t).min(1.0);
+                        // smoothstep: level = 3t² - 2t³  (slow start, fast middle, slow end)
+                        self.level = self.ar_t * self.ar_t * (3.0 - 2.0 * self.ar_t);
+                        if self.ar_t >= 1.0 {
+                            self.level = 1.0;
+                            self.stage = Stage::Decay1;
+                        }
                     }
                 }
             }
@@ -116,23 +125,74 @@ impl Envelope {
     }
 }
 
-// Attack: per-sample increment to normalised attack time (smoothstep S-curve).
-// Full attack duration fitted to DX100 hardware measurements.
-// Two-step period halves the duration; within each pair the ratio alternates ×(2/3) / ×(3/4):
+// Zero-hold duration (seconds) before the attack rise begins.
+// Measured from DX100 hardware; AR 16..31 saturate at ~0.008 s.
+const AR_ZERO_S: [f32; 32] = [
+    0.000, // 0 (no attack)
+    0.500, // 1
+    0.340, // 2
+    0.250, // 3
+    0.190, // 4
+    0.130, // 5
+    0.088, // 6
+    0.078, // 7
+    0.069, // 8
+    0.046, // 9
+    0.038, // 10
+    0.028, // 11
+    0.028, // 12
+    0.018, // 13
+    0.015, // 14
+    0.019, // 15
+    0.008, // 16
+    0.008, // 17
+    0.008, // 18
+    0.008, // 19
+    0.008, // 20
+    0.008, // 21
+    0.008, // 22
+    0.008, // 23
+    0.008, // 24
+    0.008, // 25
+    0.008, // 26
+    0.008, // 27
+    0.008, // 28
+    0.008, // 29
+    0.008, // 30
+    0.008, // 31
+];
+
+// Total attack duration (seconds) fitted to DX100 hardware measurements.
+// Two-step period; within each pair the ratio alternates ×(2/3) / ×(3/4):
 //   AR=1→8 s, AR=2→16/3 s, AR=3→4 s, AR=4→8/3 s, AR=5→2 s, AR=6→4/3 s, AR=7→1 s, …
 //   Odd  AR: t = 8 / 2^((ar-1)/2) s
 //   Even AR: t = 16 / (3 * 2^((ar-2)/2)) s
+fn ar_total_s(rate: u8) -> f32 {
+    let ar = rate as i32;
+    if ar & 1 == 1 {
+        8.0_f32 * 2.0_f32.powi(-((ar - 1) / 2))
+    } else {
+        16.0_f32 / 3.0 * 2.0_f32.powi(-((ar - 2) / 2))
+    }
+}
+
+// Attack: per-sample increment to normalised attack time (rise phase only).
+// Rise duration = total attack duration minus the zero-hold period.
 fn rate_inc_t(rate: u8, _max_rate: u8, sr: f32) -> f32 {
     if rate == 0 {
         return 0.0;
     }
-    let ar = rate as i32;
-    let t_s = if ar & 1 == 1 {
-        8.0_f32 * 2.0_f32.powi(-((ar - 1) / 2))
-    } else {
-        16.0_f32 / 3.0 * 2.0_f32.powi(-((ar - 2) / 2))
-    };
-    1.0 / (t_s * sr)
+    let zero_s = AR_ZERO_S[rate as usize];
+    let rise_s = (ar_total_s(rate) - zero_s).max(0.001);
+    1.0 / (rise_s * sr)
+}
+
+// Samples to hold at level=0 before the attack rise begins.
+fn ar_zero_samples(rate: u8, sr: f32) -> u32 {
+    if rate == 0 {
+        return 0;
+    }
+    (AR_ZERO_S[rate as usize] * sr) as u32
 }
 
 // Decay/Release: exponential (multiplicative) per-sample factor.
