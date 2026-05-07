@@ -108,9 +108,12 @@ struct EgViewerApp {
     status: String,
     view_mode: ViewMode,
     wave_height: f32,
-    x_zoom: f32,               // 1.0 = fit-all; > 1.0 = zoomed in
-    x_scroll: f32,             // [0.0, 1.0] position within the scrollable range
-    hover_time_s: Option<f32>, // cursor time from the previous frame, shown in toolbar
+    x_zoom: f32,                    // 1.0 = fit-all; > 1.0 = zoomed in
+    x_scroll: f32,                  // [0.0, 1.0] position within the scrollable range
+    hover_rect: Option<egui::Rect>, // waveform rect hovered in the previous frame
+    hover_total: usize,             // bin count (from onset) of that waveform
+    hover_row_idx: Option<usize>,   // index into self.rows of the hovered waveform
+    hover_is_sy: bool,              // false = HW/DX waveform, true = SY waveform
 }
 
 impl Default for EgViewerApp {
@@ -125,7 +128,10 @@ impl Default for EgViewerApp {
             wave_height: 88.0,
             x_zoom: 1.0,
             x_scroll: 0.0,
-            hover_time_s: None,
+            hover_rect: None,
+            hover_total: 0,
+            hover_row_idx: None,
+            hover_is_sy: false,
         }
     }
 }
@@ -233,6 +239,52 @@ impl EgViewerApp {
         };
         self.x_zoom = new_zoom;
     }
+
+    // Compute toolbar t/y strings using the live pointer position and the previously
+    // stored waveform rect, eliminating the 1-frame display lag.
+    fn hover_display(&self, ctx: &egui::Context) -> (String, String) {
+        let dash = ("—".to_string(), "—".to_string());
+        let rect = match self.hover_rect {
+            Some(r) if self.hover_total > 0 => r,
+            _ => return dash,
+        };
+        let pos = match ctx.input(|i| i.pointer.hover_pos()) {
+            Some(p) if rect.contains(p) => p,
+            _ => return dash,
+        };
+        let visible_frac = 1.0 / self.x_zoom;
+        let start_frac = self.x_scroll * (1.0 - visible_frac).max(0.0);
+        let cursor_frac = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        let bin_from_onset = (start_frac + cursor_frac * visible_frac) * self.hover_total as f32;
+        let time_s = bin_from_onset * WINDOW_MS / 1000.0;
+
+        let bin_idx = (bin_from_onset as usize).min(self.hover_total.saturating_sub(1));
+        let wave_val = self.hover_row_idx.and_then(|row_idx| {
+            self.rows.get(row_idx).and_then(|(_, row_opt)| {
+                row_opt.as_ref().map(|row| {
+                    if self.hover_is_sy {
+                        row.sy_bins
+                            .get(row.sy_onset + bin_idx)
+                            .copied()
+                            .unwrap_or(0.0)
+                            / row.sy_peak
+                    } else {
+                        row.dx_bins
+                            .get(row.dx_onset + bin_idx)
+                            .copied()
+                            .unwrap_or(0.0)
+                            / row.dx_peak
+                    }
+                })
+            })
+        });
+
+        let y_str = match wave_val {
+            Some(v) => format!("{:.3}", v),
+            None => "—".to_string(),
+        };
+        (format!("{:.6} s", time_s), y_str)
+    }
 }
 
 impl eframe::App for EgViewerApp {
@@ -296,12 +348,11 @@ impl eframe::App for EgViewerApp {
                 ui.add_space(8.0);
                 ui.label(RichText::new("│ = note-off").color(NOFF_COLOR).small());
                 ui.separator();
+                let (time_str, val_str) = self.hover_display(ctx);
                 ui.label(RichText::new("t:").weak());
-                let time_str = match self.hover_time_s {
-                    Some(t) => format!("{:.6} s", t),
-                    None => "—".to_string(),
-                };
                 ui.label(RichText::new(time_str).monospace());
+                ui.label(RichText::new("y:").weak());
+                ui.label(RichText::new(val_str).monospace());
                 if !self.status.is_empty() {
                     ui.separator();
                     ui.label(RichText::new(&self.status).color(Color32::GRAY).small());
@@ -356,14 +407,14 @@ impl eframe::App for EgViewerApp {
             let avail_h = (ui.available_height() - scrollbar_reserve).max(100.0);
             // Collect hover time across all waveform rects this frame.
             // Cell allows interior mutation inside the shared-ref closure.
-            let hover_cell = std::cell::Cell::new(None::<f32>);
+            let hover_cell = std::cell::Cell::new(None::<(egui::Rect, usize, usize, bool)>);
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .max_height(avail_h)
                 .show(ui, |ui| {
                     let wave_h = self.wave_height;
 
-                    for (voice_num, row_opt) in &self.rows {
+                    for (row_list_idx, (voice_num, row_opt)) in self.rows.iter().enumerate() {
                         ui.horizontal(|ui| {
                             // Name
                             ui.vertical(|ui| {
@@ -391,19 +442,19 @@ impl eframe::App for EgViewerApp {
                             if let Some(row) = row_opt {
                                 match self.view_mode {
                                     ViewMode::Overlay => {
-                                        if let Some(t) = draw_overlay(
+                                        if let Some(rv) = draw_overlay(
                                             ui,
                                             row,
                                             Vec2::new(wave_w, wave_h),
                                             x_zoom,
                                             x_scroll,
                                         ) {
-                                            hover_cell.set(Some(t));
+                                            hover_cell.set(Some((rv.0, rv.1, row_list_idx, false)));
                                         }
                                     }
                                     ViewMode::SideBySide => {
                                         let hw = wave_w * 0.5 - 2.0;
-                                        if let Some(t) = draw_waveform(
+                                        if let Some(rv) = draw_waveform(
                                             ui,
                                             &row.dx_bins,
                                             row.dx_onset,
@@ -414,10 +465,10 @@ impl eframe::App for EgViewerApp {
                                             x_zoom,
                                             x_scroll,
                                         ) {
-                                            hover_cell.set(Some(t));
+                                            hover_cell.set(Some((rv.0, rv.1, row_list_idx, false)));
                                         }
                                         ui.add_space(4.0);
-                                        if let Some(t) = draw_waveform(
+                                        if let Some(rv) = draw_waveform(
                                             ui,
                                             &row.sy_bins,
                                             row.sy_onset,
@@ -428,7 +479,7 @@ impl eframe::App for EgViewerApp {
                                             x_zoom,
                                             x_scroll,
                                         ) {
-                                            hover_cell.set(Some(t));
+                                            hover_cell.set(Some((rv.0, rv.1, row_list_idx, true)));
                                         }
                                     }
                                 }
@@ -446,7 +497,20 @@ impl eframe::App for EgViewerApp {
                         ui.separator();
                     }
                 });
-            self.hover_time_s = hover_cell.get();
+            match hover_cell.get() {
+                Some((rect, total, row_idx, is_sy)) => {
+                    self.hover_rect = Some(rect);
+                    self.hover_total = total;
+                    self.hover_row_idx = Some(row_idx);
+                    self.hover_is_sy = is_sy;
+                }
+                None => {
+                    self.hover_rect = None;
+                    self.hover_total = 0;
+                    self.hover_row_idx = None;
+                    self.hover_is_sy = false;
+                }
+            }
 
             // ── Horizontal scrollbar (visible only when zoomed in) ─────────────
             if self.x_zoom > 1.0 {
@@ -475,7 +539,7 @@ fn draw_waveform(
     color: Color32,
     x_zoom: f32,
     x_scroll: f32,
-) -> Option<f32> {
+) -> Option<(egui::Rect, usize)> {
     let (response, painter) = ui.allocate_painter(size, egui::Sense::hover());
     let rect = response.rect;
     painter.rect_filled(rect, 2.0, BG_COLOR);
@@ -489,7 +553,11 @@ fn draw_waveform(
     waveform_inner(
         &painter, rect, bins, onset, peak, hold_bins, total, color, x_zoom, x_scroll,
     );
-    draw_hover_cursor(response, &painter, rect, total, x_zoom, x_scroll)
+    if draw_hover_cursor(response, &painter, rect) {
+        Some((rect, total))
+    } else {
+        None
+    }
 }
 
 fn draw_overlay(
@@ -498,7 +566,7 @@ fn draw_overlay(
     size: Vec2,
     x_zoom: f32,
     x_scroll: f32,
-) -> Option<f32> {
+) -> Option<(egui::Rect, usize)> {
     let (response, painter) = ui.allocate_painter(size, egui::Sense::hover());
     let rect = response.rect;
     painter.rect_filled(rect, 2.0, BG_COLOR);
@@ -552,29 +620,19 @@ fn draw_overlay(
         font,
         SY_COLOR,
     );
-    draw_hover_cursor(response, &painter, rect, total, x_zoom, x_scroll)
+    if draw_hover_cursor(response, &painter, rect) {
+        Some((rect, total))
+    } else {
+        None
+    }
 }
 
-// Draw a vertical crosshair when hovered; return elapsed time from note-on in µs.
-fn draw_hover_cursor(
-    response: egui::Response,
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    total: usize,
-    x_zoom: f32,
-    x_scroll: f32,
-) -> Option<f32> {
+// Draw a vertical crosshair when hovered; return true if the cursor is inside rect.
+fn draw_hover_cursor(response: egui::Response, painter: &egui::Painter, rect: egui::Rect) -> bool {
     let hover_pos = match response.hover_pos() {
         Some(p) if rect.contains(p) => p,
-        _ => return None,
+        _ => return false,
     };
-
-    let visible_frac = 1.0 / x_zoom;
-    let start_frac = x_scroll * (1.0 - visible_frac).max(0.0);
-    let cursor_frac = ((hover_pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-    let bin_from_onset = (start_frac + cursor_frac * visible_frac) * total as f32;
-    let time_s = bin_from_onset * WINDOW_MS / 1000.0;
-
     painter.line_segment(
         [
             egui::pos2(hover_pos.x, rect.top()),
@@ -582,8 +640,7 @@ fn draw_hover_cursor(
         ],
         Stroke::new(1.0, Color32::from_rgba_premultiplied(220, 220, 220, 90)),
     );
-
-    Some(time_s)
+    true
 }
 
 fn waveform_inner(
