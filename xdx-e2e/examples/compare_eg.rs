@@ -45,6 +45,7 @@ fn find_onset(bins: &[f32]) -> usize {
 
 struct EgMetrics {
     atk90_ms: f32, // ms from onset to normalized RMS ≥ 0.90
+    dcy90_ms: f32, // ms from peak bin to normalized RMS ≤ 0.10 (decay 90%)
     d1l: f32,      // mean normalized RMS in last 10% of hold window
     rls50_ms: f32, // ms from note-off to 50% of note-off level
     rls90_ms: f32, // ms from note-off to 10% of note-off level
@@ -55,6 +56,7 @@ fn compute_metrics(bins: &[f32], onset: usize, hold_bins: usize) -> EgMetrics {
     if peak < 1e-7 {
         return EgMetrics {
             atk90_ms: f32::NAN,
+            dcy90_ms: f32::NAN,
             d1l: 0.0,
             rls50_ms: f32::NAN,
             rls90_ms: f32::NAN,
@@ -67,6 +69,19 @@ fn compute_metrics(bins: &[f32], onset: usize, hold_bins: usize) -> EgMetrics {
     let atk90_ms = (0..hold_bins)
         .find(|&n| get(n) >= 0.9)
         .map(|n| n as f32 * WINDOW_MS)
+        .unwrap_or(f32::NAN);
+
+    // Decay 90%: time from peak bin to first bin where level drops to 0.10
+    let peak_n = (0..hold_bins)
+        .max_by(|&a, &b| {
+            get(a)
+                .partial_cmp(&get(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(0);
+    let dcy90_ms = (peak_n..hold_bins)
+        .find(|&n| get(n) <= 0.10)
+        .map(|n| (n - peak_n) as f32 * WINDOW_MS)
         .unwrap_or(f32::NAN);
 
     // D1L: mean of last 10% of hold
@@ -88,6 +103,7 @@ fn compute_metrics(bins: &[f32], onset: usize, hold_bins: usize) -> EgMetrics {
 
     EgMetrics {
         atk90_ms,
+        dcy90_ms,
         d1l,
         rls50_ms,
         rls90_ms,
@@ -202,6 +218,10 @@ fn compare_pair(dx100_path: &str, synth_path: &str, hold_ms: f32, verbose: bool)
         "  atk(90%): HW={:7.1}ms  SY={:7.1}ms",
         dx_m.atk90_ms, sy_m.atk90_ms
     );
+    println!(
+        "  dcy(90%): HW={:7.1}ms  SY={:7.1}ms  (from peak)",
+        dx_m.dcy90_ms, sy_m.dcy90_ms
+    );
     println!("  d1l_lvl:  HW={:7.3}    SY={:7.3}", dx_m.d1l, sy_m.d1l);
     println!(
         "  rls(50%): HW={:7.1}ms  SY={:7.1}ms  (from note-off)",
@@ -231,11 +251,13 @@ fn main() {
         println!("=== EG Comparison  dir={dir}  hold={hold_ms:.0}ms ===");
         println!();
         println!(
-            "{:<3}  {:<10}  {:>9}  {:>9}  {:>7}  {:>7}  {:>9}  {:>9}  {:>9}  {:>9}",
+            "{:<3}  {:<10}  {:>9}  {:>9}  {:>9}  {:>9}  {:>7}  {:>7}  {:>9}  {:>9}  {:>9}  {:>9}",
             "#",
             "Name",
             "atk90(HW)",
             "atk90(SY)",
+            "dcy90(HW)",
+            "dcy90(SY)",
             "d1l(HW)",
             "d1l(SY)",
             "rls50(HW)",
@@ -243,7 +265,7 @@ fn main() {
             "rls90(HW)",
             "rls90(SY)"
         );
-        println!("{}", "-".repeat(100));
+        println!("{}", "-".repeat(122));
 
         let mut dx_files: Vec<_> = std::fs::read_dir(format!("{dir}/dx100"))
             .expect("read dx100 dir")
@@ -291,9 +313,10 @@ fn main() {
             let sm = compute_metrics(&sy_bins, sy_onset, hold_bins);
 
             println!(
-                "{:<3}  {:<10}  {:>8.1}ms  {:>8.1}ms  {:>7.3}  {:>7.3}  {:>8.1}ms  {:>8.1}ms  {:>8.1}ms  {:>8.1}ms",
+                "{:<3}  {:<10}  {:>8.1}ms  {:>8.1}ms  {:>8.1}ms  {:>8.1}ms  {:>7.3}  {:>7.3}  {:>8.1}ms  {:>8.1}ms  {:>8.1}ms  {:>8.1}ms",
                 voice_num, name,
                 dm.atk90_ms, sm.atk90_ms,
+                dm.dcy90_ms, sm.dcy90_ms,
                 dm.d1l, sm.d1l,
                 dm.rls50_ms, sm.rls50_ms,
                 dm.rls90_ms, sm.rls90_ms,
