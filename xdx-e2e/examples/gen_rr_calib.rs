@@ -12,14 +12,15 @@
 /// Fixed parameters: AR=31, D1R=0, D1L=15, D2R=0
 ///
 /// Key metric: rls90_ms (note-off → 10% of note-off level).
-/// Expected half-lives (SW model: 0.0014 × 2^((15-RR)×0.55)):
-///   RR=1  → hl≈294 ms → rls90≈ 976 ms
-///   RR=5  → hl≈ 63 ms → rls90≈ 210 ms
-///   RR=10 → hl≈  9 ms → rls90≈  31 ms
-///   RR=15 → hl≈1.4 ms → rls90≈   5 ms
+/// Expected half-lives (SW model: 0.000342 × 2^((15-RR)×0.94)):
+///   RR=1  → hl≈3132 ms → rls90≈10402 ms (NaN in 2 s window)
+///   RR=5  → hl≈ 231 ms → rls90≈  767 ms
+///   RR=10 → hl≈ 8.9 ms → rls90≈   30 ms
+///   RR=15 → hl≈ 0.3 ms → rls90≈    1 ms
 ///
-/// Note: RR max is 15 (vs 31 for D1R/D2R); coefficient is 0.0014 (vs 0.000092).
-/// All values complete within release=2.0 s.
+/// Note: RR max is 15 (vs 31 for D1R/D2R); coefficient is 0.000342 (vs 0.000092),
+///       exponent is 0.94 (vs 0.55 for D1R/D2R) — calibrated from DX100 hardware.
+/// RR=1-3 will show NaN for rls90 (decay incomplete in release=2.0 s window).
 ///
 /// Writes to: calibration/eg_rr_calib/rr_calib.syx
 ///
@@ -77,9 +78,9 @@ fn main() {
         voices.push(make_voice(1, false));
     }
 
-    // half-life: 0.0014 * 2^((15-rr)*0.55)  seconds
+    // half-life: 0.000342 * 2^((15-rr)*0.94)  seconds
     // rls90 = half-life * log2(10) ≈ half-life * 3.322  seconds
-    let half_life_s = |rr: u8| -> f32 { 0.0014_f32 * 2.0_f32.powf((15.0 - rr as f32) * 0.55) };
+    let half_life_s = |rr: u8| -> f32 { 0.000342_f32 * 2.0_f32.powf((15.0 - rr as f32) * 0.94) };
 
     println!(
         "{:<3}  {:<5}  {:>3}  {:>3}  {:>3}  {:>3}  {:>2}  {:>9}  {:>9}",

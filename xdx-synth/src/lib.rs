@@ -58,9 +58,9 @@ impl Envelope {
         self.ar_inc_t = rate_inc_t(ar, 31, sr);
         self.ar_zero_remain = ar_zero_samples(ar, sr);
         self.ar_t = 0.0;
-        self.d1r_mul = rate_mul((op.d1r + rate_boost).min(31), 31, 0.000092, sr);
-        self.d2r_mul = rate_mul((op.d2r + rate_boost).min(31), 31, 0.000092, sr);
-        self.rr_mul = rate_mul((op.rr + rate_boost).min(15), 15, 0.0014, sr);
+        self.d1r_mul = rate_mul((op.d1r + rate_boost).min(31), 31, 0.000092, 0.55, sr);
+        self.d2r_mul = rate_mul((op.d2r + rate_boost).min(31), 31, 0.000092, 0.55, sr);
+        self.rr_mul = rate_mul((op.rr + rate_boost).min(15), 15, 0.000342, 0.94, sr);
         // DX100: D1L 0-15 uses 3 dB per step (√2 factor per step)
         self.d1l = if op.d1l == 0 {
             0.0
@@ -196,12 +196,15 @@ fn ar_zero_samples(rate: u8, sr: f32) -> u32 {
 }
 
 // Decay/Release: exponential (multiplicative) per-sample factor.
-// coeff calibrated from hardware: D1R/D2R=0.000092, RR=0.0014.  rate=0 → no decay.
-fn rate_mul(rate: u8, max_rate: u8, coeff: f32, sr: f32) -> f32 {
+// half-life = coeff × 2^((max-rate)×exp).  rate=0 → no decay.
+// Calibrated from DX100 hardware:
+//   D1R/D2R: coeff=0.000092, exp=0.55
+//   RR:      coeff=0.000342, exp=0.94  (different step size from D1R/D2R)
+fn rate_mul(rate: u8, max_rate: u8, coeff: f32, exp: f32, sr: f32) -> f32 {
     if rate == 0 {
         return 1.0;
     }
-    let t = coeff * 2.0_f32.powf((max_rate as f32 - rate as f32) * 0.55);
+    let t = coeff * 2.0_f32.powf((max_rate as f32 - rate as f32) * exp);
     (-std::f32::consts::LN_2 / (t * sr)).exp()
 }
 
