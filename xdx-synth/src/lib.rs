@@ -53,14 +53,17 @@ impl Envelope {
         // No hard breakpoint — applies at all notes proportional to pitch.
         let effective_krs = (op.kbd_rate_scl * (op.kbd_rate_scl + 1)) / 2; // 0,1,3,6
         let rate_boost = (effective_krs as f32 * midi_note as f32 / 72.0).round() as u8;
+        // Rate=0 means "hold at current level" and is not boosted by KRS.
+        // Hardware: D1R=0 sustains at D1L indefinitely regardless of kbd_rate_scl.
+        let boost = |base: u8| if base > 0 { base + rate_boost } else { 0 };
 
-        let ar = (op.ar + rate_boost).min(31);
+        let ar = boost(op.ar).min(31);
         self.ar_inc_t = rate_inc_t(ar, 31, sr);
         self.ar_zero_remain = ar_zero_samples(ar, sr);
         self.ar_t = 0.0;
-        self.d1r_mul = rate_mul((op.d1r + rate_boost).min(31), 31, 0.000092, 0.55, sr);
-        self.d2r_mul = rate_mul((op.d2r + rate_boost).min(31), 31, 0.000092, 0.55, sr);
-        self.rr_mul = rate_mul((op.rr + rate_boost).min(15), 15, 0.000342, 0.94, sr);
+        self.d1r_mul = rate_mul(boost(op.d1r).min(31), 31, 0.000092, 0.55, sr);
+        self.d2r_mul = rate_mul(boost(op.d2r).min(31), 31, 0.000092, 0.55, sr);
+        self.rr_mul = rate_mul(boost(op.rr).min(15), 15, 0.000342, 0.94, sr);
         // DX100: D1L 0-15 uses 3 dB per step (√2 factor per step)
         self.d1l = if op.d1l == 0 {
             0.0
