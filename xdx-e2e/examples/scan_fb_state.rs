@@ -52,9 +52,10 @@ fn render_with_fb(engine: &mut FmEngine, midi_note: u8, fb_prev: f32, fb_prev2: 
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let syx_path = args.get(0).map(|s| s.as_str()).unwrap_or(
-        "calibration/preset_bank_wo_lfo/all_voices_wo_lfo.syx",
-    );
+    let syx_path = args
+        .get(0)
+        .map(|s| s.as_str())
+        .unwrap_or("calibration/preset_bank_wo_lfo/all_voices_wo_lfo.syx");
     let voice_idx: usize = args
         .get(1)
         .and_then(|s| s.parse::<usize>().ok())
@@ -63,9 +64,16 @@ fn main() {
 
     let bytes = std::fs::read(syx_path).unwrap_or_else(|e| panic!("read {syx_path}: {e}"));
     let voices = dx100_decode_32voice(&bytes).unwrap_or_else(|e| panic!("decode: {e:?}"));
-    let voice = voices.get(voice_idx).unwrap_or_else(|| panic!("out of range"));
+    let voice = voices
+        .get(voice_idx)
+        .unwrap_or_else(|| panic!("out of range"));
 
-    println!("Voice {}: \"{}\"  (FB={})", voice_idx + 1, voice.name_str(), voice.feedback);
+    println!(
+        "Voice {}: \"{}\"  (FB={})",
+        voice_idx + 1,
+        voice.name_str(),
+        voice.feedback
+    );
     println!("HW ref: rms@30ms≈0.955  rms@740ms≈0.542  rms@1060ms≈1.000");
     println!();
     println!(

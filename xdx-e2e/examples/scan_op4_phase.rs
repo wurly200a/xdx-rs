@@ -66,9 +66,10 @@ fn render_bins(engine: &mut FmEngine, midi_note: u8) -> Vec<f32> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let syx_path = args.get(0).map(|s| s.as_str()).unwrap_or(
-        "calibration/preset_bank_wo_lfo/all_voices_wo_lfo.syx",
-    );
+    let syx_path = args
+        .get(0)
+        .map(|s| s.as_str())
+        .unwrap_or("calibration/preset_bank_wo_lfo/all_voices_wo_lfo.syx");
     let voice_idx: usize = args
         .get(1)
         .and_then(|s| s.parse::<usize>().ok())
@@ -76,8 +77,7 @@ fn main() {
         .saturating_sub(1);
 
     let bytes = std::fs::read(syx_path).unwrap_or_else(|e| panic!("read {syx_path}: {e}"));
-    let voices =
-        dx100_decode_32voice(&bytes).unwrap_or_else(|e| panic!("decode failed: {e:?}"));
+    let voices = dx100_decode_32voice(&bytes).unwrap_or_else(|e| panic!("decode failed: {e:?}"));
     let voice = voices
         .get(voice_idx)
         .unwrap_or_else(|| panic!("voice index {} out of range", voice_idx + 1));
@@ -85,9 +85,7 @@ fn main() {
     println!("Voice {}: \"{}\"", voice_idx + 1, voice.name_str());
     println!("Beat period = 1/|f_OP4 - 3×f_OP1| ≈ 1038ms");
     println!();
-    println!(
-        "HW reference:  rms@30ms≈0.955  rms@740ms≈0.542  rms@1060ms≈1.000  beat_depth≈0.84"
-    );
+    println!("HW reference:  rms@30ms≈0.955  rms@740ms≈0.542  rms@1060ms≈1.000  beat_depth≈0.84");
     println!();
     println!(
         "{:>8}  {:>9}  {:>9}  {:>10}  {:>10}  note",
@@ -137,7 +135,5 @@ fn main() {
     }
 
     println!();
-    println!(
-        "Best OP4 phase: {best_phase:.3}  beat_depth: {best_depth:.4}"
-    );
+    println!("Best OP4 phase: {best_phase:.3}  beat_depth: {best_depth:.4}");
 }

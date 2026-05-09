@@ -36,12 +36,14 @@ fn read_wav(path: &str) -> Vec<f32> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let hw_path = args.get(0).map(|s| s.as_str()).unwrap_or(
-        "calibration/power_brass/dx100/01_PB_test.wav",
-    );
-    let syx_path = args.get(1).map(|s| s.as_str()).unwrap_or(
-        "calibration/power_brass/based_on_power_brass.syx",
-    );
+    let hw_path = args
+        .get(0)
+        .map(|s| s.as_str())
+        .unwrap_or("calibration/power_brass/dx100/01_PB_test.wav");
+    let syx_path = args
+        .get(1)
+        .map(|s| s.as_str())
+        .unwrap_or("calibration/power_brass/based_on_power_brass.syx");
     let voice_idx: usize = args
         .get(2)
         .and_then(|s| s.parse::<usize>().ok())
@@ -59,7 +61,9 @@ fn main() {
     // ── SW ───────────────────────────────────────────────────────────────────
     let bytes = std::fs::read(syx_path).unwrap_or_else(|e| panic!("read {syx_path}: {e}"));
     let voices = dx100_decode_32voice(&bytes).unwrap_or_else(|e| panic!("decode: {e:?}"));
-    let voice = voices.get(voice_idx).unwrap_or_else(|| panic!("voice out of range"));
+    let voice = voices
+        .get(voice_idx)
+        .unwrap_or_else(|| panic!("voice out of range"));
     println!("SW voice {}: \"{}\"", voice_idx + 1, voice.name_str());
 
     let hold_samples = (HOLD_MS * SR / 1000.0) as usize;
@@ -94,10 +98,7 @@ fn main() {
         let sw = sw_norm.get(i).copied().unwrap_or(0.0);
         let hw_bar = "#".repeat((hw * 30.0).round() as usize);
         let sw_bar = ".".repeat((sw * 30.0).round() as usize);
-        println!(
-            "{:>7.0}  {:>6.3}  {:>6.3}  H:{}",
-            t_ms, hw, sw, hw_bar
-        );
+        println!("{:>7.0}  {:>6.3}  {:>6.3}  H:{}", t_ms, hw, sw, hw_bar);
         println!("{:>7}  {:>6}  {:>6}  S:{}", "", "", "", sw_bar);
     }
 }

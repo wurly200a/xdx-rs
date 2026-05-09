@@ -14,9 +14,10 @@ const HOLD_MS: f32 = 3000.0;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let syx_path = args.get(0).map(|s| s.as_str()).unwrap_or(
-        "calibration/power_brass/based_on_power_brass.syx",
-    );
+    let syx_path = args
+        .get(0)
+        .map(|s| s.as_str())
+        .unwrap_or("calibration/power_brass/based_on_power_brass.syx");
     let voice_idx: usize = args
         .get(1)
         .and_then(|s| s.parse::<usize>().ok())
@@ -25,7 +26,9 @@ fn main() {
 
     let bytes = std::fs::read(syx_path).unwrap_or_else(|e| panic!("read {syx_path}: {e}"));
     let voices = dx100_decode_32voice(&bytes).unwrap_or_else(|e| panic!("decode: {e:?}"));
-    let voice = voices.get(voice_idx).unwrap_or_else(|| panic!("voice out of range"));
+    let voice = voices
+        .get(voice_idx)
+        .unwrap_or_else(|| panic!("voice out of range"));
 
     println!("Voice {}: \"{}\"", voice_idx + 1, voice.name_str());
     println!();
