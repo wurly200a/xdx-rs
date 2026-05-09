@@ -655,6 +655,31 @@ impl FmEngine {
         // Retire finished notes
         self.notes.retain(|n| !n.is_off());
     }
+
+    /// Render a block of audio into separate left and right channel buffers (mono-summed).
+    pub fn render_block(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
+        let algo = self.voice.algorithm;
+        let fb_depth = self.fb_depth;
+        let sr = self.sample_rate;
+        let voice = &self.voice;
+        let n = out_l.len().min(out_r.len());
+        for i in 0..n {
+            let mut s = 0.0f32;
+            for note in &mut self.notes {
+                s += note.render_sample(algo, fb_depth, sr, voice);
+            }
+            out_l[i] = s;
+            out_r[i] = s;
+        }
+        self.notes.retain(|n| !n.is_off());
+    }
+
+    /// Update the sample rate and clear all active notes.
+    /// Call this when the host changes the sample rate (e.g., on plugin re-initialization).
+    pub fn reset_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        self.notes.clear();
+    }
 }
 
 /// Render raw LFO output for `hold_samples + release_samples` ticks.
