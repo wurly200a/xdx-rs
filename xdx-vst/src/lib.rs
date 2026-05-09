@@ -1,4 +1,5 @@
 use nih_plug::prelude::*;
+use nih_plug_egui::{create_egui_editor, egui, EguiState};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use xdx_core::dx100::Dx100Voice;
@@ -14,15 +15,29 @@ struct XdxVst {
     applied_sysex: Vec<u8>,
 }
 
-#[derive(Default, Params)]
+#[derive(Params)]
 struct XdxParams {
+    /// Editor window state (size). Persisted so the window reopens at the same size.
+    #[persist = "editor"]
+    editor_state: Arc<EguiState>,
+
     /// Current voice as a DX100 1-voice SysEx dump (101 bytes). Persisted in .vstpreset.
     #[persist = "voice_sysex"]
     voice_sysex: Mutex<Vec<u8>>,
 
-    /// Absolute path to a .syx file (1-voice format). When non-empty, loaded on initialize().
+    /// Absolute path to the last loaded .syx file. Reloaded on initialize() if set.
     #[persist = "syx_path"]
     syx_path: Mutex<String>,
+}
+
+impl Default for XdxParams {
+    fn default() -> Self {
+        Self {
+            editor_state: EguiState::from_size(320, 64),
+            voice_sysex: Mutex::new(Vec::new()),
+            syx_path: Mutex::new(String::new()),
+        }
+    }
 }
 
 impl Default for XdxVst {
@@ -60,6 +75,44 @@ impl Plugin for XdxVst {
         self.params.clone()
     }
 
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        let params = self.params.clone();
+        create_egui_editor(
+            self.params.editor_state.clone(),
+            params,
+            |_ctx, _params| {}, // build: one-time init (no-op)
+            |ctx, _setter, params| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("Load SysEx").clicked() {
+                            let params = params.clone();
+                            std::thread::spawn(move || {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("SysEx", &["syx"])
+                                    .pick_file()
+                                {
+                                    match std::fs::read(&path) {
+                                        Ok(data) => {
+                                            *params.syx_path.lock() =
+                                                path.to_string_lossy().into_owned();
+                                            *params.voice_sysex.lock() = data;
+                                        }
+                                        Err(e) => {
+                                            nih_error!("failed to read {}: {}", path.display(), e);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+
+                        let name = voice_name_from_sysex(&params.voice_sysex.lock());
+                        ui.label(name);
+                    });
+                });
+            },
+        )
+    }
+
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
@@ -94,7 +147,7 @@ impl Plugin for XdxVst {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        // Poll voice_sysex for changes (e.g., DAW loaded a preset).
+        // Poll voice_sysex for changes (e.g., DAW loaded a preset, or GUI loaded a file).
         let changed = {
             if let Some(guard) = self.params.voice_sysex.try_lock() {
                 if *guard != self.applied_sysex {
@@ -134,7 +187,6 @@ impl Plugin for XdxVst {
 }
 
 impl XdxVst {
-    /// Decode voice_sysex from params and apply to the engine.
     fn apply_voice_sysex(&mut self) {
         let sysex = self.params.voice_sysex.lock().as_slice().to_vec();
         if !sysex.is_empty() {
@@ -142,7 +194,6 @@ impl XdxVst {
         }
     }
 
-    /// Decode raw SysEx bytes, apply the voice to the engine, and update tracking state.
     fn apply_sysex_bytes(&mut self, sysex: Vec<u8>) {
         match dx100_decode_1voice(&sysex) {
             Ok(voice) => {
@@ -152,6 +203,19 @@ impl XdxVst {
             }
             Err(e) => nih_warn!("invalid voice sysex: {:?}", e),
         }
+    }
+}
+
+/// Extract the voice name from a 101-byte DX100 1-voice SysEx dump.
+/// Name occupies payload bytes 77..87, i.e., raw bytes 83..93.
+fn voice_name_from_sysex(sysex: &[u8]) -> String {
+    if sysex.len() == 101 {
+        std::str::from_utf8(&sysex[83..93])
+            .unwrap_or("????????")
+            .trim_end()
+            .to_string()
+    } else {
+        "INIT".to_string()
     }
 }
 

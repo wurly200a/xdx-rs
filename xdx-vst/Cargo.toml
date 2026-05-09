@@ -8,6 +8,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 parking_lot = "0.12"
+rfd = "0.14"
 xdx-synth = { path = "../xdx-synth" }
 xdx-core = { path = "../xdx-core" }
