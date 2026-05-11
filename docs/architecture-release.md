@@ -36,7 +36,9 @@ classDiagram
         +note_off [F]
         +note_on [F]
         +render [F]
+        +render_block [F]
         +render_lfo [F]
+        +reset_sample_rate [F]
         +set_voice [F]
     }
 
